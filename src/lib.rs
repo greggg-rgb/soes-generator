@@ -46,4 +46,27 @@ pub fn generate(p: &Project) -> Result<Bundle, GenError> {
         backup_json: p.to_json(),
     })
 }
-pub fn emit(_p: &Project, _out_dir: &Path) -> Result<Emitted, GenError> { todo!() }
+pub fn emit(p: &Project, out_dir: &Path) -> Result<Emitted, GenError> {
+    let b = generate(p)?;
+    std::fs::create_dir_all(out_dir)?;
+
+    let xml_name = format!("{}.xml", names::variable_name(&p.config.text_device_name));
+    let files: [(&str, &[u8]); 8] = [
+        ("objectlist.c", b.objectlist_c.as_bytes()),
+        ("utypes.h", b.utypes_h.as_bytes()),
+        ("ecat_options.h", b.ecat_options_h.as_bytes()),
+        ("eeprom.bin", &b.eeprom_bin),
+        ("eeprom.hex", b.eeprom_hex.as_bytes()),
+        ("eeprom.h", b.eeprom_h.as_bytes()),
+        ("esi.json", b.backup_json.as_bytes()),
+        (xml_name.as_str(), b.esi_xml.as_bytes()),
+    ];
+
+    let mut paths = Vec::with_capacity(files.len());
+    for (name, contents) in files {
+        let path = out_dir.join(name);
+        std::fs::write(&path, contents)?;
+        paths.push(path);
+    }
+    Ok(Emitted { paths })
+}
