@@ -213,7 +213,7 @@ git commit -m "feat(types): Dtype/EsiType table, Otype, Access, PdoDir, Esc"
 **Interfaces:**
 - Produces:
   - `fn variable_name(name: &str) -> String` — C identifier: remove chars `+ - * = ! @`, then replace `space . , ; : /` with `_`. (Ref `validation.js:95-109`.)
-  - `fn sanitize_0x_hexa(s: &str) -> String` and parse helpers `fn parse_u32(field: &'static str, s: &str) -> Result<u32, GenError>` (accepts `0x`-prefixed or decimal, like JS `parseInt`). Used later for identity fields.
+  - parse helper `fn parse_u32(field: &'static str, s: &str) -> Result<u32, GenError>` (accepts `0x`-prefixed or decimal, like JS `parseInt`). Used later for identity fields. (The reference's `sanitize0xHexa`/`sanitizeHexa` is UI-only — `ui.js:232`, no generator or later task calls it — so it is out of scope for this port and intentionally not implemented.)
 
 Ground truth: `validation.js`, `constants.js:221-222` (`charsToReplace`, `charsToRemove`).
 
