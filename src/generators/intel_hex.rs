@@ -36,11 +36,18 @@ pub fn to_intel_hex(record: &[u8]) -> Result<String, GenError> {
             hex.push_str(&format!("{byte:02x}"));
             checksum += byte as u32;
         }
-        let checksum = (0x100 - (checksum % 0x100)) % 0x100; // two's complement
-        // JS reference: `checksum.toString(16).slice(-2)` does NOT zero-pad —
-        // a checksum below 0x10 (unlike data bytes, which pad explicitly)
-        // emits as a single hex digit. Replicated verbatim for golden parity.
-        hex.push_str(&format!("{checksum:x}\n"));
+        // Two's complement: range 1..=256, NOT reduced mod 0x100 again — JS
+        // does `checksum = 0x100 - checksum` with no further mod, so a
+        // sum ≡ 0 (mod 256) yields exactly 256 ("100" in hex), not 0.
+        let checksum = 0x100 - (checksum % 0x100);
+        // JS reference: `checksum.toString(16).slice(-2)` takes the LAST 2
+        // characters, no zero-padding. This means: a checksum below 0x10
+        // (unlike data bytes, which pad explicitly) emits as a single hex
+        // digit, while 256 ("100") correctly emits "00" (its last 2 chars).
+        // Both cases replicated verbatim for byte-for-byte golden parity.
+        let full = format!("{checksum:x}");
+        hex.push_str(&full[full.len().saturating_sub(2)..]);
+        hex.push('\n');
     }
     hex.push_str(":00000001FF");
     Ok(hex.to_uppercase())
