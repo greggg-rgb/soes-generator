@@ -13,6 +13,8 @@ Reference cloned at `.cache/EEPROM_generator` (commit `6f26c1b`, gitignored).
   proposed Rust crate shape, API sketch, test strategy, sequencing.
 - [`bugs-ledger.md`](bugs-ledger.md) — 5 confirmed bugs (with proofs) + latent issues, each with
   a port decision.
+- [`faithful-port-quirks.md`](faithful-port-quirks.md) — reference behaviors copied verbatim that
+  look like bugs, each triaged (inherited bug / quirk / by-design) so we can decide deliberately.
 
 ## Deep-dive research (source-of-truth for the port)
 

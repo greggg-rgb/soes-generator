@@ -87,8 +87,9 @@ beyond it:
   of actual PDO content size.
 - **SM2/SM3 physical size is written as `0`** in the EEPROM SyncManager category; it is never
   validated against actual PDO length.
-- **`eeprom.h` ends with `#endif __ESI_EEPROM_H__`** — a bare token after `#endif` (not valid
-  ISO C under `-pedantic`), byte-for-byte matched to the reference tool's output.
+
+See [`docs/faithful-port-quirks.md`](docs/faithful-port-quirks.md) for the full triage of
+reference behaviors copied verbatim (which are real bugs, which are harmless).
 
 ## Intentional divergences from the reference tool
 
@@ -104,3 +105,5 @@ for proofs and full detail):
   operator-precedence bug dropped Port3).
 - **XML text/attribute values are escaped** (`& < >`), which the reference's manual XML builder
   did not do.
+- **`eeprom.h` ends with the conformant `#endif /* __ESI_EEPROM_H__ */`**, not the reference's
+  bare `#endif __ESI_EEPROM_H__` token (non-conformant under `-pedantic`).

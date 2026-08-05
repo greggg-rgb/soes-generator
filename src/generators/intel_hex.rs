@@ -56,9 +56,13 @@ pub fn to_intel_hex(record: &[u8]) -> Result<String, GenError> {
 /// Encodes `record` as the `esi.h` C header: 16 bytes per line as `0xNN`,
 /// comma-separated, wrapped in the `esiEepromData[]` array.
 ///
-/// The trailing `#endif __ESI_EEPROM_H__` (bare token, not a comment) is
-/// emitted verbatim to match `binaries.js:71` byte-for-byte — do not "fix"
-/// it to valid C.
+/// The trailing `#endif` uses the conformant comment form
+/// `#endif /* __ESI_EEPROM_H__ */`. This is an **intentional divergence** from
+/// the JS reference (`binaries.js:89`), which emits a bare token
+/// `#endif __ESI_EEPROM_H__` — non-conformant under `-Wextra`/`-pedantic`
+/// ("extra tokens at end of #endif directive"). See
+/// `docs/faithful-port-quirks.md` #2. The three `eeprom.h` goldens are patched
+/// to match (in `scripts/dump_golden.js`, mirrored in `tests/common/mod.rs`).
 pub fn to_esi_eeprom_h(record: &[u8]) -> String {
     let mut result = String::from(
         "#ifndef __ESI_EEPROM_H__\n#define __ESI_EEPROM_H__\n\nunsigned char esiEepromData[] = {\n",
@@ -78,6 +82,6 @@ pub fn to_esi_eeprom_h(record: &[u8]) -> String {
             result.push(',');
         }
     }
-    result.push_str("\n};\n#endif __ESI_EEPROM_H__");
+    result.push_str("\n};\n#endif /* __ESI_EEPROM_H__ */");
     result
 }

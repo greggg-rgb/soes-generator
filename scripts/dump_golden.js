@@ -56,6 +56,23 @@ function writeFile(dir, name, data) {
   fs.writeFileSync(path.join(dir, name), data);
 }
 
+// Golden vectors match the JS reference byte-for-byte EXCEPT the port's
+// intentional divergences (see docs/faithful-port-quirks.md + tests/common/mod.rs).
+// These are applied here so re-running this dump reproduces the committed goldens
+// instead of silently reverting the port's fixes. Each replacement is a no-op
+// (idempotent) if the target substring is already in its patched form.
+function patchDivergences(name, data) {
+  if (name === 'device.xml') {
+    // bug-4: emit all 4 Physics ports (default ports Y,Y,' ',' ' -> "YY  ").
+    return data.replace(/Physics="YY "/g, 'Physics="YY  "');
+  }
+  if (name === 'eeprom.h') {
+    // #endif quirk: conformant comment form instead of the bare token.
+    return data.replace('#endif __ESI_EEPROM_H__', '#endif /* __ESI_EEPROM_H__ */');
+  }
+  return data;
+}
+
 function dumpFixture(name) {
   const fixture = JSON.parse(fs.readFileSync(path.join(FIXTURES_ROOT, `${name}.json`), 'utf8'));
   const form = w.buildMockFormHelper(fixture.form);
@@ -68,12 +85,16 @@ function dumpFixture(name) {
   writeFile(outDir, 'objectlist.c', w.objectlist_generator(form, od, indexes));
   writeFile(outDir, 'utypes.h', w.utypes_generator(form, od, indexes));
   writeFile(outDir, 'ecat_options.h', w.ecat_options_generator(form, od, indexes));
-  writeFile(outDir, 'device.xml', w.esi_generator(form, od, indexes, dc));
+  // device.xml: apply the bug-4 divergence — the Rust port emits all 4 Physics
+  // ports, so default-port fixtures become "YY  " (2 spaces) vs the JS "YY " (1).
+  writeFile(outDir, 'device.xml', patchDivergences('device.xml', w.esi_generator(form, od, indexes, dc)));
 
   const bytes = w.hex_generator(form); // Uint8Array, stringOnly=false
   writeFile(outDir, 'eeprom.bin', Buffer.from(bytes));
   writeFile(outDir, 'eeprom.hex', w.toIntelHex(bytes));
-  writeFile(outDir, 'eeprom.h', w.toEsiEepromH(bytes));
+  // eeprom.h: apply the #endif divergence — the Rust port emits conformant
+  // `#endif /* __ESI_EEPROM_H__ */` instead of the JS bare `#endif __ESI_EEPROM_H__`.
+  writeFile(outDir, 'eeprom.h', patchDivergences('eeprom.h', w.toEsiEepromH(bytes)));
   writeFile(outDir, 'configdata.txt', w.hex_generator(form, true));
 
   return form;
