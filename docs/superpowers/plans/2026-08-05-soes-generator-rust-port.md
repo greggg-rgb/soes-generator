@@ -145,7 +145,7 @@ git commit -m "scaffold: crate modules, deps, GenError/Bundle/API stubs"
   - `enum Otype { Var, Array, Record }` with `fn macro_suffix(&self) -> &'static str` → `"VAR"`/`"ARRAY"`/`"RECORD"`.
   - `enum Access { Ro, Rw, Wo, RwPre }` with `fn from_str`/`fn macro_suffix` → `"RO"`/`"RW"`/`"WO"`/`"RWpre"` (note lowercase `pre`), default `Ro`.
   - `enum PdoDir { None, Tx, Rx }`
-  - `enum Esc { Ax58100, Et1100, Lan9252, Lan9253Beckhoff, Lan9253Direct, Lan9253Indirect }` with `fn from_str(&str)->Option<Esc>` (accepts the reference strings incl. `"LAN9253 Beckhoff"`), `fn pdi_control(&self)->u8`, `fn reserved_0x05(&self)->u16`, `fn config_on_reserved_bytes(&self)->bool` (true for Ax58100 + all Lan9253), `fn max_mailbox_size(&self)->Option<u16>` (128 for Ax58100).
+  - `enum Esc { Ax58100, Et1100, Lan9252, Lan9253Beckhoff, Lan9253Direct, Lan9253Indirect }` with `fn from_str(&str)->Option<Esc>` (accepts the reference strings incl. `"LAN9253 Beckhoff"`), `fn pdi_control(&self)->u8`, `fn reserved_0x05(&self)->u16`, `fn config_on_reserved_bytes(&self)->bool` (true for Ax58100 + all Lan9253). (Do NOT add a `max_mailbox_size`/128-clamp method: the AX58100 128 clamp lives only in the UI event handler `ui.js:196-199`, never in any generator — cia402 uses AX58100 with an unclamped `MailboxSize="512"` and its golden pins `MBXSIZE 512`, so applying the clamp in the generator path would fail the golden.)
 
 Ground truth for the table: `.cache/EEPROM_generator/src/constants.js` `ESI_DT` (lines 78-91), `DTYPE` (26-45), `SupportedESC`/`configOnReservedBytes` (159-174); ESC magic in `src/generators/EEPROM.js:33-57`.
 
@@ -295,8 +295,8 @@ Ground truth: `backup.js:33-51` (shape), `constants.js:183-218` (Config field na
 
 - [ ] **Step 1: Generate the fixtures with `scripts/gen_fixtures.js`**
 
-The fixtures cannot be hand-copied: `getFormDefaultValues()` (`constants.js:183-218`) is a JS function returning an object with unquoted keys and `ESC: SupportedESC.ET1100` (an enum reference, not a string) — invalid JSON. So emit them from Node, where those symbols resolve. Write `scripts/gen_fixtures.js` that inlines `constants.js` + `cia402exampleProjectSpecs.js` (for `cia_esi_json`) via the same jsdom-free `require`/eval approach and writes:
-- `tests/fixtures/cia402.json` = the `cia_esi_json` template string **verbatim** (already valid JSON).
+The fixtures cannot be hand-copied: `getFormDefaultValues()` (`constants.js:183-218`) is a JS function returning an object with unquoted keys and `ESC: SupportedESC.ET1100` (an enum reference, not a string) — invalid JSON. So emit them from Node. Write `scripts/gen_fixtures.js` that `eval`s **only** `constants.js` (for `getFormDefaultValues`/`getEmptyObjDict`) — do NOT eval `cia402exampleProjectSpecs.js` as a whole: it is a Jasmine spec whose top-level `describe(...)` (line ~272) runs on load and references undefined globals, throwing. `cia_esi_json` is the file's first statement, a plain backtick template = valid JSON, so extract just that literal (read the file, grab the backtick block) — or, equivalently, define `global.describe = () => {}` before eval since the const binds first. Writes:
+- `tests/fixtures/cia402.json` = the extracted `cia_esi_json` template string **verbatim** (already valid JSON).
 - `tests/fixtures/default.json` = `JSON.stringify({ form: getFormDefaultValues().form, od: {sdo:{},txpdo:{},rxpdo:{}}, dc: [] }, null, 2)` (`ESC` resolves to `"ET1100"`).
 - `tests/fixtures/foe.json` = same as default but `form.DetailsEnableUseFoE = true`.
 
@@ -350,7 +350,8 @@ git commit -m "feat(model): Project/Config/Objd serde + esi.json round-trip"
 - Test: `tests/builder.rs`
 
 **Interfaces:**
-- Produces: `impl Project { pub fn builder() -> ProjectBuilder }`; `ProjectBuilder` with `config: Config` public (set fields directly), and `add_sdo(Objd)`, `add_txpdo(Objd)`, `add_rxpdo(Objd)`, `build() -> Project`. Constructors `Objd::var(index, Dtype, name)`, `Objd::var_with_value(index, Dtype, name, value: &str)` (used by the REAL32/INTEGER64 tests), `Objd::array(...)`, `Objd::record(...)`. Index passed as `u16`, stored as the uppercase-hex key (`format!("{index:X}")`).
+- Produces: `impl Project { pub fn builder() -> ProjectBuilder }`; `ProjectBuilder` with `config: Config` public (override fields directly), and `add_sdo(Objd)`, `add_txpdo(Objd)`, `add_rxpdo(Objd)`, `build() -> Project`. Constructors `Objd::var(index, Dtype, name)`, `Objd::var_with_value(index, Dtype, name, value: &str)` (used by the REAL32/REAL64/INTEGER64 tests), `Objd::var_string(index, name, value: &str, size: u16)` (VISIBLE_STRING), `Objd::array(...)`, `Objd::record(...)`. Index passed as `u16`, stored as the uppercase-hex key (`format!("{index:X}")`).
+  - **The builder MUST seed `config` with the form defaults** (`getFormDefaultValues().form`: `VendorID "0x000"`, `ProductCode/RevisionNumber/SerialNumber` defaults, non-empty device/HW/SW strings, `EEPROMsize "2048"`, `ESC "ET1100"`), NOT `Config::default()` (empty strings). This is load-bearing: `build_object_dictionary` parses the identity fields via `parse_u32` (`populateMandatoryObjectValues`, `od.js:275`), which errors on empty strings — so a builder-built project with an empty default `Config` would fail `build_object_dictionary().unwrap()` in every downstream builder test (Tasks 7/8/9/10).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -464,15 +465,28 @@ fn cia402_synthesizes_sm_assignment_and_mappings() {
     assert!(od.contains_key(&0x1C12) || od.contains_key(&0x1C13)); // SM assignment synthesized
 }
 #[test]
-fn validation_rejects_bad_input() {   // spec §Model validation set
-    use soes_generator::{model::{Project, Objd}, types::Dtype};
-    // PDO-mapped dtype not in dtypes_PDO_allowed (VISIBLE_STRING is allowed; use a disallowed case per constants.js:93)
-    // duplicate object name across sections -> Err
-    let p = Project::builder()
+fn validation_rejects_duplicate_names() {   // spec §Model validation set
+    use soes_generator::{model::{Project, Objd}, types::Dtype, GenError};
+    let p = Project::builder()   // builder seeds a VALID default Config (Task 5), so this reaches the dup check
         .add_sdo(Objd::var(0x2000, Dtype::Unsigned32, "dup"))
         .add_txpdo(Objd::var(0x6000, Dtype::Unsigned32, "dup"))
         .build();
-    assert!(build_object_dictionary(&p.config, &p.od).is_err(), "duplicate name must error");
+    let err = build_object_dictionary(&p.config, &p.od).unwrap_err();
+    assert!(matches!(err, GenError::Od(ref m) if m.contains("dup")), "expected dup-name Od error, got {err:?}");
+}
+#[test]
+fn validation_rejects_pdo_mapped_disallowed_dtype() {
+    use soes_generator::{model::{Project, Objd}, types::Dtype};
+    // VISIBLE_STRING is NOT in dtypes_PDO_allowed (constants.js:93) → PDO-mapping it must error
+    let p = Project::builder().add_txpdo(Objd::var(0x6000, Dtype::VisibleString, "s")).build();
+    assert!(build_object_dictionary(&p.config, &p.od).is_err());
+}
+#[test]
+fn validation_rejects_short_visible_string_size() {
+    use soes_generator::model::{Project, Objd};
+    // size 2 < value length 4 → error (VISIBLE_STRING size ≥ value.len())
+    let p = Project::builder().add_sdo(Objd::var_string(0x2000, "s", "abcd", 2)).build();
+    assert!(build_object_dictionary(&p.config, &p.od).is_err());
 }
 ```
 
@@ -480,7 +494,7 @@ fn validation_rejects_bad_input() {   // spec §Model validation set
 
 - [ ] **Step 3: Implement incrementally** — port `getMandatoryObjects`, `populateMandatoryObjectValues`, `addSDOitems` (+ `objectlist_link_utypes` data links, set `is_sdo_item`), `addPdoObjectsSection` (SM assignment, mapping records, `getPdoMappingValue` bit-packing `0xINDEX SUBIDX BITSIZE`, boolean padding `booleanPaddingBitsize=7`). Set `pdo_mappings` per section. Keys stored as `u16`.
 
-- [ ] **Step 3b: Implement the spec's validation set** (returns `GenError::Od`): object-name uniqueness across sections (`ui.js:434`), PDO-mapped dtype ∈ `dtypes_PDO_allowed` (`constants.js:93`, `ui.js:445`), and VISIBLE_STRING `size ≥ value.len()` (`ui.js:404`). (multiple-PDO-per-object and EEPROMsize are validated in Tasks 11/12; non-ASCII in Tasks 11/12 string paths.)
+- [ ] **Step 3b: Implement the spec's validation set** (returns `GenError::Od`): object-name uniqueness across sections (`ui.js:434`), PDO-mapped dtype ∈ `dtypes_PDO_allowed` (`constants.js:93`, `ui.js:445`), and VISIBLE_STRING `size ≥ value.len()` (`ui.js:404`). (multiple-PDO-per-object → Task 11 esi; EEPROMsize → Tasks 12/13; non-ASCII → Task 12 eeprom string paths only.)
 
 - [ ] **Step 4: Run tests** — Run: `cargo test --test od_build` → PASS.
 
@@ -561,6 +575,12 @@ fn real32_default_value_is_encoded_not_zeroed() {   // bug-1 regression (referen
     let out = objectlist::generate(&p.config, &od);
     assert!(out.contains("0x3FC00000"), "REAL32 1.5 must encode IEEE-754, got:\n{out}");
 }
+#[test]
+fn real64_default_value_passes_through() {   // spec Testing §2 (REAL64 is not a bug — default branch)
+    let p = Project::builder().add_txpdo(Objd::var_with_value(0x6000, Dtype::Real64, "d", "2.5")).build();
+    let od = build_object_dictionary(&p.config, &p.od).unwrap();
+    assert!(objectlist::generate(&p.config, &od).contains("2.5"));   // objectlist.js:192 default branch
+}
 ```
 (`Objd::var_with_value` is defined in Task 5.)
 
@@ -583,10 +603,23 @@ fn real32_default_value_is_encoded_not_zeroed() {   // bug-1 regression (referen
 
 Ground truth: `src/generators/ecat_options.js`. `#define`s for mailbox/SM addresses; `MAX_MAPPINGS_SM2/3` from `getMaxMappings` (count PDO-mapped subitems, **+1 per BOOLEAN**); `MAX_{RX,TX}PDO_SIZE = 512` kept hard-coded (reference limitation). Offsets via uppercase hex without `0x`.
 
-- [ ] **Step 1: Write failing golden test** (default + cia402 + foe), same shape as Task 8.
+- [ ] **Step 1: Write failing tests** — the golden tests (default + cia402 + foe, same shape as Task 8), **plus a BOOLEAN-padding test** (no fixture exercises BOOLEAN PDO padding — spec Testing §2 requires it):
+
+```rust
+#[test]
+fn boolean_pdo_counts_as_two_mappings() {   // ecat_options.js:76 (+1 padding); od.js booleanPaddingBitsize=7
+    use soes_generator::{model::{Project, Objd}, types::Dtype, od_build::build_object_dictionary, gen::ecat_options};
+    let p = Project::builder().add_txpdo(Objd::var(0x6000, Dtype::Boolean, "flag")).build();
+    let od = build_object_dictionary(&p.config, &p.od).unwrap();
+    // one BOOLEAN VAR → data entry + 7-bit padding entry → MAX_MAPPINGS_SM3 == 2
+    assert!(ecat_options::generate(&p.config, &od).contains("#define MAX_MAPPINGS_SM3 2"));
+}
+```
+(This also exercises `od_build`'s `booleanPaddingBitsize=7` mapping-record synthesis — the padding entry appears in the PDO mapping record too.)
+
 - [ ] **Step 2: Run to verify it fails** — FAIL.
-- [ ] **Step 3: Implement** `generate` + `get_max_mappings`.
-- [ ] **Step 4: Run tests** — PASS.
+- [ ] **Step 3: Implement** `generate` + `get_max_mappings` (BOOLEAN counts as 2).
+- [ ] **Step 4: Run tests** — golden + boolean-padding PASS.
 - [ ] **Step 5: Commit** — `git commit -am "feat(gen): ecat_options.h generator"`
 
 ---
@@ -627,7 +660,7 @@ fn config_data_string_matches_esc_golden() {
 ```
 
 - [ ] **Step 2: Run to verify it fails** — FAIL.
-- [ ] **Step 3: Implement** `eeprom::write_config_area` + `eeprom::config_data_string` first (self-contained, no CRC), then esi `generate` + `xml_escape`, bug-4 4-port concat, multi-PDO `GenError`. Reject non-ASCII in ESI text fields (`GenError`, per Global Constraints).
+- [ ] **Step 3: Implement** `eeprom::write_config_area` + `eeprom::config_data_string` first (self-contained, no CRC), then esi `generate` + `xml_escape`, bug-4 4-port concat, multi-PDO `GenError`. (Do NOT reject non-ASCII here: the ESI XML is `encoding="UTF-8"` (`esi_xml.js:20`) and ESI-only fields like `VendorName`/`TextGroupName5` legitimately carry non-ASCII; the non-ASCII restriction is scoped to the 4 EEPROM-bound strings and enforced in Task 12, not here.)
 - [ ] **Step 4: Run tests** — golden (default/cia402/foe) PASS, config-data + both bug tests PASS.
 - [ ] **Step 5: Commit** — `git commit -am "feat(gen): ESI XML + config_data_string (+4-port fix, +escaping)"`
 
@@ -784,10 +817,10 @@ fn generate_default_fills_all_bundle_fields_from_goldens() {
 
 ## Self-review
 
-**Spec coverage:** API (`generate`/`emit`/`Bundle`/`Emitted`/`GenError`) → Tasks 1,14,15. Model + serde (with `#[serde(default)]` on CoE/FoE bools) + builder → 4,5. `Dtype`/`ESI_DT`/one-numeric-bitsize → 2 (+ INTEGER64 guard test in 8). `PdoDir` on flat OD → 4 (`pdo_dir`), 7; `is_sdo_item` on flat OD → 4/7, consumed by utypes → 8. `od_build` → 7. Five generators → 8–13. Bug fixes: 1→T9, 4→T11(esi), 5→T12(eeprom)/T13, XML escaping→T11(esi); reader bugs 2,3 out of scope (spec). Validation set (dup-name / PDO-dtype / VISIBLE_STRING-size → T7 Step 3b; multiple-PDO → esi; EEPROMsize → eeprom/intel_hex; non-ASCII → esi + eeprom string paths). Golden vectors + oracle → 6 (driven by the fixtures from 4). CRC known-answer → eeprom task. Filenames → 15. build.rs/CLI → 15,16,17.
+**Spec coverage:** API (`generate`/`emit`/`Bundle`/`Emitted`/`GenError`) → Tasks 1,14,15. Model + serde (with `#[serde(default)]` on CoE/FoE bools) + builder → 4,5. `Dtype`/`ESI_DT`/one-numeric-bitsize → 2 (+ INTEGER64 guard test in 8). `PdoDir` on flat OD → 4 (`pdo_dir`), 7; `is_sdo_item` on flat OD → 4/7, consumed by utypes → 8. `od_build` → 7. Five generators → 8–13. Bug fixes: 1→T9, 4→T11(esi), 5→T12(eeprom)/T13, XML escaping→T11(esi); reader bugs 2,3 out of scope (spec). Testing §2 gaps filled: REAL32→T9, REAL64→T9, INTEGER64→T8, BOOLEAN PDO padding→T10, non-multiple EEPROMsize→T12/T13. Validation set (dup-name / PDO-dtype / VISIBLE_STRING-size, all tested → T7 Step 1+3b; multiple-PDO → esi; EEPROMsize → eeprom/intel_hex; non-ASCII → **eeprom string paths only, T12** — ESI is UTF-8). Golden vectors + oracle → 6 (driven by the fixtures from 4). CRC known-answer → eeprom task. Filenames → 15. build.rs/CLI → 15,16,17.
 
 **Placeholder scan:** the empty `src/gen/*.rs` in Task 1 are deliberate compile stubs, each replaced by a named later task — not TBDs. Fixtures are generated by `scripts/gen_fixtures.js` (T4), not hand-copied. No "add error handling"/"write tests" hand-waves; every code step has real code or a named ground-truth function to port.
 
-**Type consistency:** `generate`/`emit` signatures identical in Tasks 1/14/15; `build_object_dictionary(&Config,&OdSections)->Result<Od,_>` used consistently (7→8–13); text/ESI generators `(&Config,&Od[,&[SyncMode]])->…` , `eeprom::hex_generator(&Config)->Result<Vec<u8>>`, `intel_hex(&[u8])`. **`config_data_string`/`write_config_area` are implemented in Task 11 (esi) — self-contained, no CRC — and reused by Task 12 (eeprom); no forward dependency, no stub.** `Objd::var`/`var_with_value` constructors defined in Task 5 (used in 8/9). `is_sdo_item` field defined in Task 4, set in Task 7, read in Task 8. `indexmap` retained for the editable `OdMap` (preserves JSON key order incl. cia402's 1-digit `"A"` key; flat `Od` is `BTreeMap<u16,_>`).
+**Type consistency:** `generate`/`emit` signatures identical in Tasks 1/14/15; `build_object_dictionary(&Config,&OdSections)->Result<Od,_>` used consistently (7→8–13); text/ESI generators `(&Config,&Od[,&[SyncMode]])->…` , `eeprom::hex_generator(&Config)->Result<Vec<u8>>`, `intel_hex(&[u8])`. **`config_data_string`/`write_config_area` are implemented in Task 11 (esi) — self-contained, no CRC — and reused by Task 12 (eeprom); no forward dependency, no stub.** `Objd::var`/`var_with_value`/`var_string` constructors defined in Task 5 (used in 7/8/9/10). **The builder seeds a valid default `Config` (form defaults), not `Config::default()` — required so `build_object_dictionary().unwrap()` in the Task 7/8/9/10 builder tests doesn't panic on identity-field parsing.** `is_sdo_item` field defined in Task 4, set in Task 7, read in Task 8 (derived in od_build, not round-tripped — harmless that the serde key `is_sdo_item` ≠ backup key `isSDOitem`). `indexmap` retained for the editable `OdMap` (preserves JSON key order incl. cia402's 1-digit `"A"` key; flat `Od` is `BTreeMap<u16,_>`).
 
 > **Note on the esi↔eeprom dependency:** no task reorder was needed. ESI (Task 11) needs only the ConfigData string, so Task 11 implements `eeprom::config_data_string` + `write_config_area` self-contained (config words 0-6, no CRC); Task 12 (full EEPROM image) reuses `write_config_area`. Execution order 1→17 is dependency-correct. Bug-4 lives in the esi task (11), bug-5 in the eeprom (12) + intel_hex (13) tasks.
