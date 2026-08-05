@@ -50,6 +50,21 @@ fn eepromsize_not_multiple_of_32_errors() {
     }
 }
 
+/// BUG-5 (fix round 1): a 32-aligned size can still be too small to hold
+/// the fixed config/identity/mailbox area plus the STRING/GENERAL/FMMU/
+/// SYNCMANAGER categories - e.g. 128 is exactly where the STRING category
+/// starts, leaving no room for it at all. This must return an error, not
+/// panic with an out-of-bounds write.
+#[test]
+fn eepromsize_aligned_but_too_small_errors() {
+    let mut p = load_fixture("default");
+    p.config.eeprom_size = "128".into();
+    match eeprom::hex_generator(&p.config).unwrap_err() {
+        GenError::Config { field, .. } => assert_eq!(field, "EEPROMsize"),
+        other => panic!("expected GenError::Config{{field: \"EEPROMsize\"}}, got {other:?}"),
+    }
+}
+
 /// The JS reference writes `charCodeAt` straight into a single EEPROM byte
 /// per character (`writeEEPROMstrings`, `EEPROM.js:138-170`), silently
 /// truncating any character above 0xFF and corrupting the STRING category.
@@ -62,6 +77,28 @@ fn non_ascii_device_string_is_rejected() {
     match eeprom::hex_generator(&p.config).unwrap_err() {
         GenError::Config { field, .. } => assert_eq!(field, "TextDeviceName"),
         other => panic!("expected GenError::Config, got {other:?}"),
+    }
+}
+
+/// Sweeps every 32-aligned EEPROMsize from 0 to 2048: `hex_generator` must
+/// always return `Ok` or `Err(GenError::Config{field:"EEPROMsize",..})`,
+/// never panic. Directly covers the bug report ("128, 160, ... 256 all pass
+/// the multiple-of-32 check yet panic").
+#[test]
+fn eepromsize_never_panics_across_aligned_sizes() {
+    let p = load_fixture("default");
+    for size in (0..=2048usize).step_by(32) {
+        let mut config = p.config.clone();
+        config.eeprom_size = size.to_string();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            eeprom::hex_generator(&config)
+        }));
+        match result {
+            Ok(Ok(_)) => {}
+            Ok(Err(GenError::Config { field, .. })) => assert_eq!(field, "EEPROMsize"),
+            Ok(Err(other)) => panic!("size {size}: expected Config error, got {other:?}"),
+            Err(_) => panic!("size {size}: hex_generator panicked"),
+        }
     }
 }
 

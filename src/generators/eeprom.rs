@@ -62,7 +62,35 @@ pub fn hex_generator(config: &Config) -> Result<Vec<u8>, GenError> {
     if eeprom_size == 0 || !eeprom_size.is_multiple_of(32) {
         return Err(GenError::Config {
             field: "EEPROMsize",
-            msg: format!("must be a non-zero multiple of 32 bytes (ideally 128), got {eeprom_size}"),
+            msg: format!("must be a non-zero multiple of 32 bytes, got {eeprom_size}"),
+        });
+    }
+
+    let strings = [
+        ("TextDeviceType", config.text_device_type.as_str()),
+        ("TextGroupType", config.text_group_type.as_str()),
+        ("ImageName", config.image_name.as_str()),
+        ("TextDeviceName", config.text_device_name.as_str()),
+    ];
+    for (field, s) in strings {
+        check_ascii(field, s)?;
+    }
+    let str_values = strings.map(|(_, s)| s);
+    // A 32-aligned size can still be too small to hold the fixed-layout
+    // config/identity/mailbox area plus the STRING/GENERAL/FMMU/SYNCMANAGER
+    // categories (whose STRING length depends on the configured strings) -
+    // that's still an unvalidated-size bug (moving the reference's panic
+    // from "downstream .hex splitter" to "here" isn't a fix). Require
+    // enough room for the whole layout up front instead.
+    let required = min_required_len(&str_values);
+    if eeprom_size < required {
+        return Err(GenError::Config {
+            field: "EEPROMsize",
+            msg: format!(
+                "must be at least {required} bytes to hold the config/identity/mailbox area \
+                 plus the STRING/GENERAL/FMMU/SYNCMANAGER categories for the configured \
+                 strings, got {eeprom_size}"
+            ),
         });
     }
 
@@ -117,16 +145,7 @@ pub fn hex_generator(config: &Config) -> Result<Vec<u8>, GenError> {
     write_word(&mut buf, 63, 1); // version
 
     // Vendor-specific info: STRING/GENERAL/FMMU/SYNCMANAGER categories.
-    let strings = [
-        ("TextDeviceType", config.text_device_type.as_str()),
-        ("TextGroupType", config.text_group_type.as_str()),
-        ("ImageName", config.image_name.as_str()),
-        ("TextDeviceName", config.text_device_name.as_str()),
-    ];
-    for (field, s) in strings {
-        check_ascii(field, s)?;
-    }
-    let offset = write_eeprom_strings(&mut buf, 0x80, &strings.map(|(_, s)| s));
+    let offset = write_eeprom_strings(&mut buf, 0x80, &str_values);
     let offset = write_general_settings(config, offset, &mut buf);
     let offset = write_fmmu(offset, &mut buf);
     let sm2_offset = parse_u32("SM2Offset", &config.sm2_offset)? as u16;
@@ -142,6 +161,30 @@ pub fn hex_generator(config: &Config) -> Result<Vec<u8>, GenError> {
     );
 
     Ok(buf)
+}
+
+/// Minimum EEPROM image length (bytes) that fits the fixed-layout area
+/// (config/identity/mailbox/reserved, bytes `0..0x80`) plus the STRING
+/// category (variable length, depends on the configured strings) and the
+/// fixed-size GENERAL (36 bytes) / FMMU (8 bytes) / SYNCMANAGER (36 bytes)
+/// categories that follow it. This is exactly the end offset
+/// `write_sync_managers` finishes at, so `eeprom_size >= min_required_len`
+/// guarantees every write in `hex_generator` stays in bounds.
+fn min_required_len(strings: &[&str; 4]) -> usize {
+    const GENERAL_CATEGORY_LEN: usize = 36; // EEPROM.js:172-205
+    const FMMU_CATEGORY_LEN: usize = 8; // EEPROM.js:207-222
+    const SYNCMANAGER_CATEGORY_LEN: usize = 36; // EEPROM.js:224-268
+    0x80 + string_category_len(strings) + GENERAL_CATEGORY_LEN + FMMU_CATEGORY_LEN + SYNCMANAGER_CATEGORY_LEN
+}
+
+/// Total byte length of the STRING category `write_eeprom_strings` writes:
+/// a 4-byte header (type + length word) plus its content, padded up to an
+/// even length. Mirrors `writeEEPROMstrings`'s own length math,
+/// `EEPROM.js:140-152`.
+fn string_category_len(strings: &[&str; 4]) -> usize {
+    let total_string_data_length =
+        strings.iter().map(|s| s.len()).sum::<usize>() + strings.len() + 1;
+    4 + total_string_data_length.div_ceil(2) * 2
 }
 
 /// Rejects any character outside the ASCII range. The JS reference writes
