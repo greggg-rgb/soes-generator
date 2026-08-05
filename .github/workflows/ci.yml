@@ -1,0 +1,26 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # xmllint (libxml2-utils) validates the generated ESI against the
+      # ETG.2000 schema in tests/esi_schema.rs. Without it those tests skip;
+      # in CI we install it so schema conformance is actually enforced.
+      - name: Install xmllint
+        run: sudo apt-get update && sudo apt-get install -y libxml2-utils
+
+      - name: Assert xmllint is available (so ESI schema tests don't silently skip)
+        run: xmllint --version
+
+      - name: Build (release)
+        run: cargo build --release --verbose
+
+      - name: Test
+        run: cargo test --verbose

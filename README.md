@@ -69,6 +69,16 @@ Projects can also be built in code instead of loaded from JSON, via
 and its `add_sdo`/`add_txpdo`/`add_rxpdo` methods, together with the `Objd::var` /
 `var_with_value` / `var_string` / `array` / `record` constructors.
 
+## ESI schema validation
+
+The generated ESI XML is validated against the official **ETG.2000 v1.0.10** EtherCAT
+Slave Information schema (`tests/schema/EtherCATInfo.xsd`, vendored — see
+[`tests/schema/README.md`](tests/schema/README.md)). `tests/esi_schema.rs` runs
+`xmllint --schema` over every fixture's generated ESI; a schema regression fails the test.
+`xmllint` (from `libxml2-utils`) is the standard EtherCAT ESI validator — install it to run
+the check locally (`apt install libxml2-utils`); the tests skip cleanly without it, and CI
+installs it so the check is always enforced.
+
 ## Docs
 
 - [Design spec](docs/superpowers/specs/2026-08-05-soes-generator-rust-port-design.md) — full
