@@ -87,6 +87,33 @@ fn validate(od: &OdSections) -> Result<(), GenError> {
         }
     }
 
+    // 1b. dtype presence (trust-boundary guard, not in the JS reference —
+    //     the JS crashes on `ESI_DT[undefined].bitsize` instead). Every VAR/
+    //     ARRAY object, and every RECORD subitem past the Max-SubIndex
+    //     placeholder at index 0, must carry a dtype or every downstream
+    //     `.expect()` (objectlist.rs, esi.rs, utypes.rs, od_build.rs) panics.
+    for section in sections {
+        for idx in used_indexes(section) {
+            let objd = &section[&hex_key(idx)];
+            match objd {
+                Objd::Var { dtype: None, name, .. } | Objd::Array { dtype: None, name, .. } => {
+                    return Err(GenError::Od(format!("object {name:?} (0x{idx:X}) is missing dtype")));
+                }
+                Objd::Record { items, name, .. } => {
+                    for item in items.iter().skip(1) {
+                        if item.dtype.is_none() {
+                            return Err(GenError::Od(format!(
+                                "object {name:?} (0x{idx:X}): subitem {:?} is missing dtype",
+                                item.name
+                            )));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
     // 2/3: dtype + VISIBLE_STRING size checks (ui.js:441-462, VAR case only
     // — ARRAY/RECORD have no equivalent check in the reference).
     for section in sections {

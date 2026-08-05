@@ -100,3 +100,43 @@ fn validation_rejects_short_visible_string_size() {
     let p = Project::builder().add_sdo(Objd::var_string(0x2000, "s", "abcd", 2)).build();
     assert!(build_object_dictionary(&p.config, &p.od).is_err());
 }
+
+/// FINAL-REVIEW Fix 1 (trust-boundary): a JSON-valid VAR with `dtype`
+/// omitted must be REJECTED by `build_object_dictionary`, not panic one of
+/// the downstream `.expect("... without dtype")` call sites. Built via
+/// `Project::from_json` (not the builder — the builder always sets a
+/// dtype), so this exercises the real untrusted-input path.
+#[test]
+fn validation_rejects_dtypeless_var() {
+    use soes_generator::{model::Project, GenError};
+
+    let mut fixture: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string("tests/fixtures/default.json").unwrap()).unwrap();
+    fixture["od"]["sdo"]["2000"] = serde_json::json!({"otype": "VAR", "name": "x"});
+
+    let p = Project::from_json(&serde_json::to_string(&fixture).unwrap()).unwrap();
+    let err = build_object_dictionary(&p.config, &p.od).unwrap_err();
+    assert!(matches!(err, GenError::Od(_)), "expected GenError::Od, got {err:?}");
+}
+
+/// Same as above, for a RECORD subitem (index > 0, i.e. not the
+/// Max-SubIndex placeholder) missing `dtype`.
+#[test]
+fn validation_rejects_dtypeless_record_subitem() {
+    use soes_generator::{model::Project, GenError};
+
+    let mut fixture: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string("tests/fixtures/default.json").unwrap()).unwrap();
+    fixture["od"]["sdo"]["2000"] = serde_json::json!({
+        "otype": "RECORD",
+        "name": "r",
+        "items": [
+            {"name": "Max SubIndex"},
+            {"name": "sub without dtype"}
+        ]
+    });
+
+    let p = Project::from_json(&serde_json::to_string(&fixture).unwrap()).unwrap();
+    let err = build_object_dictionary(&p.config, &p.od).unwrap_err();
+    assert!(matches!(err, GenError::Od(_)), "expected GenError::Od, got {err:?}");
+}

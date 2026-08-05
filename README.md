@@ -89,13 +89,15 @@ beyond it:
   validated against actual PDO length.
 - **`eeprom.h` ends with `#endif __ESI_EEPROM_H__`** — a bare token after `#endif` (not valid
   ISO C under `-pedantic`), byte-for-byte matched to the reference tool's output.
-- **EEPROM strings are ASCII/Latin-1**, not UTF-8.
 
 ## Intentional divergences from the reference tool
 
 A few reference bugs are fixed rather than reproduced (see the [bugs ledger](docs/bugs-ledger.md)
 for proofs and full detail):
 
+- **EEPROM-bound strings must be ASCII** — a non-ASCII character (anything above 0x7F) is a
+  validation error (`GenError`), not silently passed through as Latin-1 like a byte-for-byte
+  reference limitation would be.
 - **REAL32 default values** are now encoded from the object's actual `value` (IEEE-754), not
   emitted as `0x00000000` for every REAL32.
 - **ESI `Physics` attribute reflects all 4 ports**, not just the first 3 (the reference's

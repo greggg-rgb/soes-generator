@@ -17,6 +17,11 @@ use crate::types::Dtype;
 
 pub fn generate(config: &Config, od: &Od) -> String {
     let use_foe = if config.details_enable_use_foe { 1 } else { 0 };
+    // These `.expect()`s are safe only because `eeprom::hex_generator` runs
+    // earlier in `generate()` (lib.rs) and validates these same MailboxSize/
+    // Rx/TxMailboxOffset/SM2/SM3Offset fields via `?` first — a malformed
+    // value already returned a clean GenError before this infallible
+    // (`-> String`) function is ever reached.
     let mailbox_size = parse_u32("MailboxSize", &config.mailbox_size).expect("valid MailboxSize");
     let rx_mailbox = index_to_string(&config.rx_mailbox_offset, "RxMailboxOffset");
     let tx_mailbox = index_to_string(&config.tx_mailbox_offset, "TxMailboxOffset");
