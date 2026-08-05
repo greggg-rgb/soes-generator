@@ -6,6 +6,8 @@ Reference cloned at `.cache/EEPROM_generator` (commit `6f26c1b`, gitignored).
 
 ## Start here
 
+- [`../README.md`](../README.md) — crate README: `build.rs` codegen, CLI usage, the
+  `generate`/`emit` API, and the kept reference limitations.
 - [`00-overview.md`](00-overview.md) — architecture, inputs/outputs, code flow, the hard parts.
 - [`feasibility-and-port-plan.md`](feasibility-and-port-plan.md) — verdict (feasible, low-risk),
   proposed Rust crate shape, API sketch, test strategy, sequencing.
