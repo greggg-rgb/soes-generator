@@ -347,8 +347,10 @@ fn pdo_mapping_value(index: u16, subindex: u16, bitsize: u16) -> String {
     format!("0x{index:04X}{subindex:02x}{bitsize:02x}")
 }
 
-/// `varBitsize`, `od.js:146-153`.
-fn var_bitsize(dtype: Dtype, size: Option<u16>) -> u16 {
+/// `varBitsize`, `od.js:146-153`. `pub(crate)`: reused by `generators::esi`
+/// (`esi_xml.js`'s `varBitsize` is the very same shared helper, not a
+/// re-derivation).
+pub(crate) fn var_bitsize(dtype: Dtype, size: Option<u16>) -> u16 {
     let mut bitsize = dtype.esi().bitsize;
     if dtype == Dtype::VisibleString {
         bitsize *= size.unwrap_or(0);
