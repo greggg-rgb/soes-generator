@@ -65,6 +65,10 @@ that want a subset use `generate` and write the fields they need.
 **build.rs config source:** support both `Project::from_json_file(path)` (a `device.json`
 checked into the wrapper crate, read at build time) and programmatic construction in build.rs.
 
+**Output filenames:** fixed literals (`objectlist.c`, `utypes.h`, `ecat_options.h`, `eeprom.bin`,
+`eeprom.hex`, `eeprom.h`, `esi.json`) except the ESI XML, which is
+`<variableName(TextDeviceName)>.xml` — the reference's `getProjectName` (`ui.js:134`).
+
 ## Model
 
 `model.rs`, serde-serializable, mirroring the reference `esi.json` `{form, od, dc}` so
@@ -79,23 +83,38 @@ pub struct Project {
     pub dc: Vec<SyncMode>,  // Distributed-Clock op modes (ESI only)
 }
 
-pub struct OdSections { pub sdo: OdMap, pub txpdo: OdMap, pub rxpdo: OdMap }  // index(hex) → Objd
+pub struct OdSections { pub sdo: OdMap, pub txpdo: OdMap, pub rxpdo: OdMap }
+// OdMap = order-preserving map (IndexMap / BTreeMap) keyed by hex-string index, so JSON
+// re-serialization preserves the reference's key order.
 
-pub enum Objd {                                   // one variant per OTYPE
+pub enum Objd {                                   // editable-model shape; one variant per OTYPE
     Var   { dtype: Dtype, name, access, value, size: Option<u16> /* VISIBLE_STRING */ },
     Array { dtype: Dtype, name, access, items: Vec<SubItem> },      // subitems inherit dtype
     Record{ name, items: Vec<SubItem> },          // each subitem carries its own dtype
 }
+// Runtime flat OD (derived by od_build, never serialized):
+pub type Od = BTreeMap<u16, Objd>;   // u16 keys ⇒ numeric iteration order == reference
+                                     // getUsedIndexes (integer scan 0x1000..0xFFFF), so there is
+                                     // NO separate `Index` / `used_indexes` concept.
+// The flat Objd additionally carries `pdo: PdoDir` (None/Tx/Rx), set from its section of origin;
+// utypes/objectlist/ecat_options read it to split Inputs/Outputs, OR in ATYPE_{TX,RX}PDO, and
+// count mappings. Field-level detail (SubItem shape, value types, items[0] placeholder): research/01.
 ```
 
-- `serde` for JSON. `Config` numeric fields kept as the raw strings the backup stores (hex or
-  dec, `0x`-prefixed), parsed at point of use — matches the reference and preserves round-trip.
+- `serde` for JSON, with per-field `#[serde(rename)]` on `Config` (keys like `VendorID`,
+  `CoeDetailsEnableSDO` aren't uniform). `Config` numeric fields kept as the raw strings the
+  backup stores (hex or dec, `0x`-prefixed), parsed at point of use — matches the reference.
+  **Round-trip = semantic equality** (load `esi.json` → equal model). Byte-exact re-serialization
+  of `backup_json` is available but not required (no golden vector pins it); if wanted, it needs
+  the ordered `OdMap` above plus 2-space indent to match `backup.js`'s `JSON.stringify(_, null, 2)`.
 - **Builder** (`Project::builder()...`) for programmatic construction: `vendor_id`,
   `product_code`, `add_sdo`, `add_txpdo`, `add_rxpdo`, etc., with typed helpers
   (`Var::new(index, Dtype::U32, "name")`).
 - Validation (reference's `alert()`-level rules) surfaces as `Result`/`GenError`, not silent
   drops: duplicate names, PDO-dtype restrictions, VISIBLE_STRING size ≥ value length,
-  multiple PDO mappings per object, `EEPROMsize` not a multiple of 32/128.
+  multiple PDO mappings per object, `EEPROMsize` not a multiple of 32/128, and non-ASCII
+  characters in EEPROM-bound strings (reference is Latin-1 via `charCodeAt` — the port rejects
+  rather than truncating).
 
 ## Modules
 
@@ -118,8 +137,8 @@ tests/
   golden/          lifted toEqualLines vectors: default, cia402, foe, per-dtype, 6 ESC config-data
 ```
 
-Each `gen/*` module is one focused unit: input = `(&Config, &Od, &[Index])` (+ `&[SyncMode]`
-for ESI), output = a `String` (or `Vec<u8>` for `eeprom`). `eeprom.rs` reads only `Config`.
+Each `gen/*` module is one focused unit. Signatures: text/ESI generators take `(&Config, &Od)`
+(ESI also `&[SyncMode]`) → `String`; `eeprom(&Config) -> Vec<u8>`; `intel_hex(&[u8]) -> (hex, header)`.
 
 ## Extensibility seams (built as boundaries now, features later)
 
@@ -137,9 +156,9 @@ for ESI), output = a `String` (or `Vec<u8>` for `eeprom`). `eeprom.rs` reads onl
 ```
 generate(project)
   ├─ build_object_dictionary(config, od)        // mandatory objs + values + SDO + TX/RX PDO synthesis
-  │    → flat Od : map<hexIndex, Objd>          //   (SM-assign 1C12/1C13, 0x14xx/0x1Axx maps, BOOLEAN +7-bit pad)
-  ├─ indexes = used_indexes(od)                 // sorted hex-string keys 0x1000..0xFFFF
-  └─ each generator (config, od, indexes[, dc]) → Bundle field
+  │    → flat Od = BTreeMap<u16, Objd>          //   (SM-assign 1C12/1C13, 0x14xx/0x1Axx maps, BOOLEAN +7-bit pad;
+  │                                             //    numeric key order == reference; each Objd carries PdoDir)
+  └─ each generator (config, od[, dc]) → Bundle field
 ```
 Full walkthrough: [`../../00-overview.md`](../../00-overview.md) §Code flow.
 
@@ -148,21 +167,29 @@ Full walkthrough: [`../../00-overview.md`](../../00-overview.md) §Code flow.
 | # | Fix |
 |---|-----|
 | 1 | REAL32 default encodes IEEE-754 of `objd.value` (`1.5`→`0x3FC00000`), not placeholder `0`. |
-| 4 | ESI `Physics` includes all 4 ports; agrees with EEPROM `getPhysicalPort`. |
+| 4 | ESI `Physics` includes all 4 ports; agrees with EEPROM `getPhysicalPort`. **This changes the default/CiA-402/FoE/VAR ESI vectors (`"YY "`→`"YY  "`) — those must be regenerated, see below.** |
 | 5 | Validate/pad `EEPROMsize` to a multiple of 32 (ideally 128); reject with a clear error otherwise. |
 | — | ESI XML text/attributes are escaped (`& < >`). |
 | 2, 3 | In the reader — **deferred** with ESI import (out of scope v1). |
 
-Verified: bugs 1, 4 don't touch the default/CiA-402 golden paths (default ports `YY`, no REAL32
-objects), so the fixes keep the reused vectors green. `#endif __ESI_EEPROM_H__` is reproduced
-verbatim to keep the `binariesSpecs` vector green (latent, not "fixed").
+Golden-vector impact: bug 1 (REAL32) touches no reused path — there is no REAL32 object anywhere
+in `spec/`, so those vectors stay green. Bug 4 **does** change reused vectors: the default,
+CiA-402, FoE and per-dtype ESI vectors all pin `Physics="YY "` (only `P0+P1+P2`; the defaults are
+`Y Y ' ' ' '` and the `|| P3` branch is dead code), so emitting all four ports yields `"YY  "`.
+Those ESI golden strings must therefore be **regenerated with our fixed output, not reused
+verbatim** — the JS reference stops being a byte-exact ESI oracle at exactly the deliberately-fixed
+divergence points (bug 4, XML escaping), which we pin with our own expected values. Everything
+else (C files, EEPROM binary, config-data) stays a byte-exact oracle. `#endif __ESI_EEPROM_H__`
+is reproduced verbatim to keep the `binariesSpecs` vector green (latent, not "fixed").
 
 ## Testing
 
 1. **Golden vectors first (TDD).** Lift the Jasmine `toEqualLines` expected strings into
    `tests/golden/*` — default (`emptyProjectSpecs`), CiA-402 (`cia402exampleProjectSpecs`,
    exercises RECORD/ARRAY/PDO/DC), FoE, per-dtype VAR, and the 6 ESC config-data strings —
-   and assert each generator reproduces them byte-for-byte.
+   and assert each generator reproduces them byte-for-byte. Exception: the ESI vectors on the
+   bug-4 / XML-escaping paths are regenerated with our fixed output (see Bug fixes), not lifted
+   verbatim.
 2. **Fill the reference's gaps** (unpinned in JS, specified here): REAL32/REAL64 values,
    BOOLEAN PDO padding, non-multiple `EEPROMsize`, builder validation.
 3. **CRC known-answer test** for the SII CRC-8 (poly `0x07`, init `0xFF`, 14 bytes).
