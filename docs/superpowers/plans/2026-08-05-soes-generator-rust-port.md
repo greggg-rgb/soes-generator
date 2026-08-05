@@ -186,7 +186,7 @@ Expected: FAIL (types/methods not defined).
 
 - [ ] **Step 3: Implement the enums + tables**
 
-Add `#[derive(Debug, Clone, Copy, PartialEq, Eq)]` on all. Implement `esi()` as a `match` returning the 12 `EsiType` rows from `constants.js:78-91`; `macro_suffix`/`from_ident` as matches over the DTYPE strings; `Esc` methods from `EEPROM.js:33-57` (`pdi_control` default `0x05`, LAN9252 `0x80`, LAN9253 `0x82`; `reserved_0x05` `0x0000` default, `0x001A` Ax58100, `0xC040` Lan9253). Derive `EsiType` `PartialEq`.
+Add `#[derive(Debug, Clone, Copy, PartialEq, Eq)]` on all. Implement `esi()` as a `match` returning the 12 `EsiType` rows from `constants.js:78-91`; `macro_suffix`/`from_ident` as matches over the DTYPE strings; `Esc` methods from `EEPROM.js:33-57`: `pdi_control` = `0x05` for default/AX58100/**LAN9253 Beckhoff**, `0x80` for LAN9252 **and LAN9253 Indirect**, `0x82` for **LAN9253 Direct only** (per-variant — do not collapse all LAN9253 to one value); `reserved_0x05` `0x0000` default, `0x001A` Ax58100, `0xC040` Lan9253 variants. Derive `EsiType` `PartialEq`.
 
 - [ ] **Step 4: Run tests**
 
@@ -247,7 +247,7 @@ use crate::GenError;
 const REMOVE: &[char] = &['+', '-', '*', '=', '!', '@'];
 const REPLACE: &[char] = &[' ', '.', ',', ';', ':', '/'];
 pub fn variable_name(name: &str) -> String {
-    name.chars().filter(|c| !REMOVE.contains(c))
+    name.trim().chars().filter(|c| !REMOVE.contains(c))   // .trim() matches sanitizeString (validation.js:95)
         .map(|c| if REPLACE.contains(&c) { '_' } else { c }).collect()
 }
 pub fn parse_u32(field: &'static str, s: &str) -> Result<u32, GenError> {
@@ -276,25 +276,31 @@ git add src/names.rs && git commit -m "feat(names): variable_name + hex/dec pars
 
 **Files:**
 - Modify: `src/model.rs`
-- Create test fixtures: `tests/fixtures/default.json`, `tests/fixtures/cia402.json` (copy the backup JSON the JS specs embed — see Step 1)
+- Create: `scripts/gen_fixtures.js` (emits the fixtures — see Step 1)
+- Create test fixtures (generated): `tests/fixtures/{default,foe,cia402}.json`
 - Test: `tests/model_roundtrip.rs`
 
 **Interfaces:**
 - Produces:
   - `type OdMap = indexmap::IndexMap<String, Objd>;`
   - `struct OdSections { pub sdo: OdMap, pub txpdo: OdMap, pub rxpdo: OdMap }`
-  - `#[serde(tag = "otype")] enum Objd { #[serde(rename="VAR")] Var{..}, #[serde(rename="ARRAY")] Array{..}, #[serde(rename="RECORD")] Record{..} }` with fields: `dtype: Option<Dtype>` (via `#[serde(with=...)]` string form), `name: String`, `access: Option<Access>`, `value: Option<serde_json::Value>` (number-or-string, faithful), `size: Option<u16>`, `items: Vec<SubItem>`, `pdo_mappings: Vec<String>` (`#[serde(default)]`).
+  - `#[serde(tag = "otype")] enum Objd { #[serde(rename="VAR")] Var{..}, #[serde(rename="ARRAY")] Array{..}, #[serde(rename="RECORD")] Record{..} }` with fields: `dtype: Option<Dtype>` (via `#[serde(with=...)]` string form), `name: String`, `access: Option<Access>`, `value: Option<serde_json::Value>` (number-or-string, faithful), `size: Option<u16>`, `items: Vec<SubItem>`, `pdo_mappings: Vec<String>` (`#[serde(default)]`), `is_sdo_item: bool` (`#[serde(default)]` — set true for SDO-section objects in `od_build`; utypes' Parameters section keys off it, `utypes.js:47`, and it is NOT derivable from `pdo_mappings` since mandatory VARs also lack mappings).
   - `struct SubItem { name: String, dtype: Option<Dtype>, value: Option<serde_json::Value>, access: Option<Access> }` (`#[serde(default)]` on all but name).
-  - `struct Config { .. ~31 fields with #[serde(rename="VendorID")] etc; 7 CoE/FoE fields bool; rest String .. }`
+  - `struct Config { .. ~31 fields, each `#[serde(rename="VendorID"/…)]`; the 7 CoE/FoE fields are `bool` with `#[serde(default)]` (the backup omits absent checkboxes — cia402 has no `DetailsEnableUseFoE`, so plain `bool` would fail deserialize); the rest `String`. }`
   - `struct SyncMode { name, description, assign_activate, sync0_cycle_time, sync0_shift_time, sync1_cycle_time, sync1_shift_time }` with renames matching backup keys (`Name`, `AssignActivate`, `Sync0cycleTime`, ...).
   - `struct Project { config: Config, #[serde(rename="od")] od: OdSections, dc: Vec<SyncMode> }` with `impl Project { pub fn from_json(s: &str) -> Result<Self, serde_json::Error>; pub fn from_json_file(p: &Path) -> ...; pub fn to_json(&self) -> String }`.
   - `impl Objd { pub fn pdo_dir(&self) -> PdoDir }` — `Tx` if `pdo_mappings` contains `"txpdo"`, `Rx` if `"rxpdo"`, else `None`.
 
 Ground truth: `backup.js:33-51` (shape), `constants.js:183-218` (Config field names/defaults), research/01 §1-2, §6.
 
-- [ ] **Step 1: Capture the fixture JSON**
+- [ ] **Step 1: Generate the fixtures with `scripts/gen_fixtures.js`**
 
-The CiA-402 backup object is embedded in `.cache/EEPROM_generator/spec/generators/cia402exampleProjectSpecs.js` (the `cia_esi_json` const). The default project is `getFormDefaultValues()` in `constants.js:183` plus empty `od`/`dc`. Write both as `tests/fixtures/{cia402,default}.json` by copying those literals verbatim. (Verify by eye that keys match `{form|config, od, dc}`; the backup uses key `form` — decide the serde rename: `#[serde(rename="form")] config`.)
+The fixtures cannot be hand-copied: `getFormDefaultValues()` (`constants.js:183-218`) is a JS function returning an object with unquoted keys and `ESC: SupportedESC.ET1100` (an enum reference, not a string) — invalid JSON. So emit them from Node, where those symbols resolve. Write `scripts/gen_fixtures.js` that inlines `constants.js` + `cia402exampleProjectSpecs.js` (for `cia_esi_json`) via the same jsdom-free `require`/eval approach and writes:
+- `tests/fixtures/cia402.json` = the `cia_esi_json` template string **verbatim** (already valid JSON).
+- `tests/fixtures/default.json` = `JSON.stringify({ form: getFormDefaultValues().form, od: {sdo:{},txpdo:{},rxpdo:{}}, dc: [] }, null, 2)` (`ESC` resolves to `"ET1100"`).
+- `tests/fixtures/foe.json` = same as default but `form.DetailsEnableUseFoE = true`.
+
+Run: `cd .cache/EEPROM_generator && NODE_PATH="$(pwd)/node_modules" node ../../scripts/gen_fixtures.js`. Commit the three fixtures. The backup uses top-level key `form` → `#[serde(rename="form")] config` on `Project`. (Task 6's golden dump then consumes these same fixtures as input, guaranteeing fixture/golden fidelity from one source.)
 
 - [ ] **Step 2: Write the failing test**
 
@@ -306,7 +312,7 @@ fn cia402_roundtrips_semantically() {
     let src = std::fs::read_to_string("tests/fixtures/cia402.json").unwrap();
     let p = Project::from_json(&src).expect("deserialize");
     // spot-check load fidelity
-    assert_eq!(p.config.vendor_id, "0x600");
+    assert_eq!(p.config.vendor_id, "0x1337");   // cia402 fixture VendorID
     assert!(p.od.txpdo.len() + p.od.rxpdo.len() > 0);
     // semantic round-trip: reload our re-serialization, compare models
     let again = Project::from_json(&p.to_json()).unwrap();
@@ -344,7 +350,7 @@ git commit -m "feat(model): Project/Config/Objd serde + esi.json round-trip"
 - Test: `tests/builder.rs`
 
 **Interfaces:**
-- Produces: `impl Project { pub fn builder() -> ProjectBuilder }`; `ProjectBuilder` with `config: Config` public (set fields directly), and `add_sdo(Objd)`, `add_txpdo(Objd)`, `add_rxpdo(Objd)`, `build() -> Project`. Constructors `Objd::var(index, Dtype, name)`, `Objd::array(...)`, `Objd::record(...)`. Index passed as `u16`, stored as the uppercase-hex key (`format!("{index:X}")`).
+- Produces: `impl Project { pub fn builder() -> ProjectBuilder }`; `ProjectBuilder` with `config: Config` public (set fields directly), and `add_sdo(Objd)`, `add_txpdo(Objd)`, `add_rxpdo(Objd)`, `build() -> Project`. Constructors `Objd::var(index, Dtype, name)`, `Objd::var_with_value(index, Dtype, name, value: &str)` (used by the REAL32/INTEGER64 tests), `Objd::array(...)`, `Objd::record(...)`. Index passed as `u16`, stored as the uppercase-hex key (`format!("{index:X}")`).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -372,6 +378,7 @@ fn builder_places_objects_by_section() {
 
 **Files:**
 - Create: `scripts/dump_golden.js`
+- Consumes: `tests/fixtures/{default,foe,cia402}.json` (from Task 4)
 - Create: `tests/golden/**` (generated, committed)
 - Create: `tests/common/mod.rs`
 
@@ -380,8 +387,8 @@ fn builder_places_objects_by_section() {
 
 - [ ] **Step 1: Write `scripts/dump_golden.js`**
 
-Reuse the jsdom loader from `docs/research/repro/harness.js` (inline all `src/*.js` + `spec/helpers/formMockHelper.js` + the fixture-defining spec files). For each fixture — `default` (`buildMockFormHelper()`), `cia402` (restore `cia_esi_json`), `foe` (default + `DetailsEnableUseFoE=true`), and the per-dtype VARs from `spec/generators/VAR/*` — build `od = buildObjectDictionary(form, odSections)`, `indexes = getUsedIndexes(od)`, then write:
-`objectlist_generator`, `utypes_generator`, `ecat_options_generator`, `esi_generator`, `hex_generator(form)` (as `eeprom.bin`), `toIntelHex(...)` (`eeprom.hex`), `toEsiEepromH(...)` (`eeprom.h`), and `hex_generator(form,true)` (`configdata.txt`) — into `tests/golden/<fixture>/`. Also dump the 6 ESC configdata strings into `tests/golden/esc/<esc>.txt`.
+Reuse the jsdom loader from `docs/research/repro/harness.js` (inline all `src/*.js` + `spec/helpers/formMockHelper.js`). Drive it from the **three committed fixtures** (not the spec files — the per-dtype VAR inputs are closure-local in `spec/generators/VAR/*` and not extractable). For each of `default`/`foe`/`cia402`: read `tests/fixtures/<name>.json`, then `form = buildMockFormHelper(fixture.form)` (formMockHelper wraps the flat backup values into the `.value`/`.checked` mock the generators expect), `odSections = fixture.od`, `dc = fixture.dc`; build `od = buildObjectDictionary(form, odSections)`, `indexes = getUsedIndexes(od)`, then write:
+`objectlist_generator`, `utypes_generator`, `ecat_options_generator`, `esi_generator(form,od,indexes,dc)`, `hex_generator(form)` (as `eeprom.bin`), `toIntelHex(...)` (`eeprom.hex`), `toEsiEepromH(...)` (`eeprom.h`), and `hex_generator(form,true)` (`configdata.txt`) — into `tests/golden/<fixture>/`. Also loop the 6 `SupportedESC` values (default form, override `form.ESC`) and dump `hex_generator(form,true)` into `tests/golden/esc/<esc>.txt`. (The INTEGER64 numeric-bitsize footgun is covered by a builder-constructed Rust unit test in Task 8, not a dumped VAR golden.)
 
 - [ ] **Step 2: Run the dump and commit the goldens**
 
@@ -426,7 +433,7 @@ git commit -m "test: golden vectors dumped from JS reference + line compare help
 
 **Interfaces:**
 - Consumes: `model::{Project, OdSections, Objd}`, `types::*`, `names::variable_name`.
-- Produces: `pub type Od = std::collections::BTreeMap<u16, Objd>; pub fn build_object_dictionary(config: &Config, od: &OdSections) -> Result<Od, GenError>`. The flat `Od` merges: mandatory objects (`1000,1008,1009,100A,1018,1C00`) with values populated from `config`; SDO items (with `data = &Obj.x` links injected via `variable_name`); TX then RX PDO items, synthesizing SM-assignment arrays (`1C13`/`1C12`) and per-object mapping records (`0x1Axx`/`0x14xx`), with BOOLEAN 7-bit padding. Each object's `pdo_mappings` set from its section.
+- Produces: `pub type Od = std::collections::BTreeMap<u16, Objd>; pub fn build_object_dictionary(config: &Config, od: &OdSections) -> Result<Od, GenError>`. The flat `Od` merges: mandatory objects (`1000,1008,1009,100A,1018,1C00`) — `populateMandatoryObjectValues` (`od.js:267-280`) fills only `1008/1009/100A` (value+size from device/HW/SW strings) and `1018:01-04` (vendor/product/revision/serial) from `config`; `1000` stays `0x1389` and `1C00` items stay `1,2,3,4`; SDO items (with `data = &Obj.x` links via `variable_name`, and `is_sdo_item = true`); TX then RX PDO items (that order, `od.js:287-288`), synthesizing SM-assignment arrays (`1C13`/`1C12`) and per-object mapping records (`0x1Axx`/`0x14xx`), with BOOLEAN 7-bit padding. Each object's `pdo_mappings` set from its section.
 
 Ground truth: `od.js:91-291` (the whole build), research/01 §3. This is the largest task — implement it in sub-steps mirroring the reference functions, committing after each green test.
 
@@ -445,6 +452,10 @@ fn empty_project_has_mandatory_objects() {
     // numeric ordering (BTreeMap): keys ascend
     let keys: Vec<u16> = od.keys().copied().collect();
     assert!(keys.windows(2).all(|w| w[0] < w[1]));
+    // structural values (mirror odSpecs.js getExpectedEmptyOd, odSpecs.js:7-28):
+    // 1000 stays constant 0x1389; 1018 is a RECORD with a Max SubIndex placeholder at items[0];
+    // 1C00 array items are 1,2,3,4. Assert a representative few:
+    // (exact accessors depend on the Objd API — assert 1000's value == 0x1389 and 1C00 has 4 real items)
 }
 #[test]
 fn cia402_synthesizes_sm_assignment_and_mappings() {
@@ -452,11 +463,24 @@ fn cia402_synthesizes_sm_assignment_and_mappings() {
     let od = build_object_dictionary(&p.config, &p.od).unwrap();
     assert!(od.contains_key(&0x1C12) || od.contains_key(&0x1C13)); // SM assignment synthesized
 }
+#[test]
+fn validation_rejects_bad_input() {   // spec §Model validation set
+    use soes_generator::{model::{Project, Objd}, types::Dtype};
+    // PDO-mapped dtype not in dtypes_PDO_allowed (VISIBLE_STRING is allowed; use a disallowed case per constants.js:93)
+    // duplicate object name across sections -> Err
+    let p = Project::builder()
+        .add_sdo(Objd::var(0x2000, Dtype::Unsigned32, "dup"))
+        .add_txpdo(Objd::var(0x6000, Dtype::Unsigned32, "dup"))
+        .build();
+    assert!(build_object_dictionary(&p.config, &p.od).is_err(), "duplicate name must error");
+}
 ```
 
 - [ ] **Step 2: Run to verify it fails** — Run: `cargo test --test od_build` → FAIL.
 
-- [ ] **Step 3: Implement incrementally** — port `getMandatoryObjects`, `populateMandatoryObjectValues`, `addSDOitems` (+ `objectlist_link_utypes` data links), `addPdoObjectsSection` (SM assignment, mapping records, `getPdoMappingValue` bit-packing `0xINDEX SUBIDX BITSIZE`, boolean padding `booleanPaddingBitsize=7`). Set `pdo_mappings` per section. Keys stored as `u16`.
+- [ ] **Step 3: Implement incrementally** — port `getMandatoryObjects`, `populateMandatoryObjectValues`, `addSDOitems` (+ `objectlist_link_utypes` data links, set `is_sdo_item`), `addPdoObjectsSection` (SM assignment, mapping records, `getPdoMappingValue` bit-packing `0xINDEX SUBIDX BITSIZE`, boolean padding `booleanPaddingBitsize=7`). Set `pdo_mappings` per section. Keys stored as `u16`.
+
+- [ ] **Step 3b: Implement the spec's validation set** (returns `GenError::Od`): object-name uniqueness across sections (`ui.js:434`), PDO-mapped dtype ∈ `dtypes_PDO_allowed` (`constants.js:93`, `ui.js:445`), and VISIBLE_STRING `size ≥ value.len()` (`ui.js:404`). (multiple-PDO-per-object and EEPROMsize are validated in Tasks 11/12; non-ASCII in Tasks 11/12 string paths.)
 
 - [ ] **Step 4: Run tests** — Run: `cargo test --test od_build` → PASS.
 
@@ -474,7 +498,7 @@ fn cia402_synthesizes_sm_assignment_and_mappings() {
 - Consumes: `od_build::Od`, `model::Config`, `types::*`, `names::variable_name`.
 - Produces: `pub fn generate(config: &Config, od: &Od) -> String`.
 
-Ground truth: `src/generators/utypes.js`, research/02 §5. `serial` uint32 always; Inputs = `pdo_dir()==Tx`, Outputs = `Rx`, Parameters = `isSDOitem`; ctype from `Dtype::esi().ctype`; VISIBLE_STRING → `char name[size]`; ARRAY → `ctype name[len]`; RECORD → anon struct.
+Ground truth: `src/generators/utypes.js`, research/02 §5. `serial` uint32 always; Inputs = `pdo_dir()==Tx`, Outputs = `Rx`, Parameters = objects with `is_sdo_item` (NOT "no pdo_mappings" — mandatory VARs lack mappings too); ctype from `Dtype::esi().ctype`; VISIBLE_STRING → `char name[size]`; ARRAY → `ctype name[len]`; RECORD → anon struct.
 
 - [ ] **Step 1: Write the failing golden test**
 
@@ -488,8 +512,16 @@ fn utypes_default_matches_golden() {
     let od = build_object_dictionary(&p.config, &p.od).unwrap();
     common::assert_eq_lines(&utypes::generate(&p.config, &od), &common::load_golden("default", "utypes.h"));
 }
+#[test]
+fn integer64_uses_numeric_bitsize_and_int64_ctype() {   // guards the JS string-'64' footgun
+    use soes_generator::{model::Objd, types::Dtype};
+    let p = soes_generator::model::Project::builder()
+        .add_txpdo(Objd::var(0x6000, Dtype::Integer64, "big")).build();
+    let od = build_object_dictionary(&p.config, &p.od).unwrap();
+    assert!(utypes::generate(&p.config, &od).contains("int64_t big;"));
+}
 ```
-Add the same for `cia402`.
+Add the same golden test for `cia402`.
 
 - [ ] **Step 2: Run to verify it fails** — Run: `cargo test --test gen_utypes` → FAIL.
 - [ ] **Step 3: Implement** `generate` per the reference.
@@ -508,7 +540,7 @@ Add the same for `cia402`.
 - Consumes: `Od`, `Config`, `types::*`, `names::variable_name`.
 - Produces: `pub fn generate(config: &Config, od: &Od) -> String`; private `fn float32_to_hex(v: f32) -> String` (`format!("{:08X}", v.to_bits())`).
 
-Ground truth: `src/generators/objectlist.js`. Per-otype `_objd` rows; flags `ATYPE_{access}` OR `ATYPE_{RXPDO|TXPDO}` from `pdo_dir()`; `SDOobjects[]` terminated `{0xffff,0xff,0xff,0xff,NULL,NULL}`; subindex zero-padded 2 hex digits. **Bug-1 fix:** REAL32 default value encodes `float32_to_hex(objd.value)` (parse value to f32), NOT the placeholder. Copy the VISIBLE_STRING `'0'` value behavior deliberately (data travels in the `data` column).
+Ground truth: `src/generators/objectlist.js`. Per-otype `_objd` rows; flags `ATYPE_{access}` OR `ATYPE_{RXPDO|TXPDO}` from `pdo_dir()`; `SDOobjects[]` terminated `{0xffff,0xff,0xff,0xff,NULL,NULL}`; subindex zero-padded to 2 **decimal** digits then emitted after `0x` (reference quirk — subindex 10 → `0x10` meaning decimal 10, `objectlist.js:198-204`; NOT hex). **Bug-1 fix:** REAL32 default value encodes `float32_to_hex(objd.value)` (parse value to f32), NOT the placeholder. Copy the VISIBLE_STRING `'0'` value behavior deliberately (data travels in the `data` column).
 
 - [ ] **Step 1: Write failing tests — golden + the new REAL32 test**
 
@@ -530,7 +562,7 @@ fn real32_default_value_is_encoded_not_zeroed() {   // bug-1 regression (referen
     assert!(out.contains("0x3FC00000"), "REAL32 1.5 must encode IEEE-754, got:\n{out}");
 }
 ```
-(Add `Objd::var_with_value` constructor in Task 5's file if not present — a one-line helper. If added here, note it in the Task-5 interface.)
+(`Objd::var_with_value` is defined in Task 5.)
 
 - [ ] **Step 2: Run to verify it fails** — Run: `cargo test --test gen_objectlist` → FAIL.
 - [ ] **Step 3: Implement** `generate` + `float32_to_hex` with the bug-1 fix.
@@ -563,11 +595,13 @@ Ground truth: `src/generators/ecat_options.js`. `#define`s for mailbox/SM addres
 
 **Files:**
 - Modify: `src/gen/esi.rs`
+- Create (partial): `src/gen/eeprom.rs` — `config_data_string` + a shared `write_config_area` (the rest of `eeprom.rs`, the full image + CRC, is Task 12)
 - Test: `tests/gen_esi.rs`
 
 **Interfaces:**
-- Consumes: `Od`, `Config`, `model::SyncMode`, `types::*`; `gen::eeprom::config_data_string` (Task 12) for `<ConfigData>`. **Order:** if Task 12 isn't done yet, stub `config_data_string` to read the `configdata.txt` golden in the test, and wire the real call once Task 12 lands. (Interfaces block for Task 12 must expose `pub fn config_data_string(config:&Config)->Result<String,GenError>`.)
-- Produces: `pub fn generate(config: &Config, od: &Od, dc: &[SyncMode]) -> Result<String, GenError>`; private `fn xml_escape(s: &str) -> String` (`& < > " '`).
+- Consumes: `Od`, `Config`, `model::SyncMode`, `types::*`.
+- Produces: `pub fn generate(config: &Config, od: &Od, dc: &[SyncMode]) -> Result<String, GenError>` (embeds `<ConfigData>` via `config_data_string`); private `fn xml_escape(s: &str) -> String` (`& < > " '`).
+  - Also produces (self-contained, needed here so esi has no forward dependency): `pub fn eeprom::config_data_string(config: &Config) -> Result<String, GenError>` and a private `fn write_config_area(buf: &mut [u8], config: &Config) -> Result<(), GenError>`. Config area = words 0-6 (bytes 0-13) only — the ConfigData string never needs the CRC (word 7) or categories (`EEPROM.js:349-357`), so it builds without the full image. Task 12's `hex_generator` reuses `write_config_area`.
 
 Ground truth: `src/generators/esi_xml.js`, research/02 §2. **Bug-4 fix:** `Physics` concatenates all four `PortNPhysical` values (`P0+P1+P2+P3`), matching `getPhysicalPort`. **Escaping:** all user text/attribute values go through `xml_escape`. Multiple PDO mappings per object → `GenError` (not silent).
 
@@ -586,12 +620,16 @@ fn physics_includes_all_four_ports() {   // bug-4 regression
 fn xml_text_is_escaped() {
     // device name with '&' -> "&amp;" appears in output, raw '&' does not
 }
+#[test]
+fn config_data_string_matches_esc_golden() {
+    // default config (ET1100) -> config_data_string == tests/golden/esc/et1100.txt (7 bytes hex)
+}
 ```
 
 - [ ] **Step 2: Run to verify it fails** — FAIL.
-- [ ] **Step 3: Implement** `generate` + `xml_escape`, bug-4 4-port concat, multi-PDO `GenError`.
-- [ ] **Step 4: Run tests** — golden (default/cia402/foe) PASS, both bug tests PASS.
-- [ ] **Step 5: Commit** — `git commit -am "feat(gen): ESI XML generator (+4-port fix, +escaping)"`
+- [ ] **Step 3: Implement** `eeprom::write_config_area` + `eeprom::config_data_string` first (self-contained, no CRC), then esi `generate` + `xml_escape`, bug-4 4-port concat, multi-PDO `GenError`. Reject non-ASCII in ESI text fields (`GenError`, per Global Constraints).
+- [ ] **Step 4: Run tests** — golden (default/cia402/foe) PASS, config-data + both bug tests PASS.
+- [ ] **Step 5: Commit** — `git commit -am "feat(gen): ESI XML + config_data_string (+4-port fix, +escaping)"`
 
 ---
 
@@ -602,8 +640,8 @@ fn xml_text_is_escaped() {
 - Test: `tests/gen_eeprom.rs`
 
 **Interfaces:**
-- Consumes: `Config`, `types::Esc`, `names::parse_u32`.
-- Produces: `pub fn hex_generator(config: &Config) -> Result<Vec<u8>, GenError>` (full SII image), `pub fn config_data_string(config: &Config) -> Result<String, GenError>` (7 or 14 bytes hex), private `fn find_crc(bytes: &[u8], n: usize) -> u8` (poly `0x07`, init `0xFF`, MSB-first).
+- Consumes: `Config`, `types::Esc`, `names::parse_u32`, and `write_config_area` (from Task 11).
+- Produces: `pub fn hex_generator(config: &Config) -> Result<Vec<u8>, GenError>` (full SII image; reuses `write_config_area` for words 0-6, then CRC + identity + mailbox + categories), private `fn find_crc(bytes: &[u8], n: usize) -> u8` (poly `0x07`, init `0xFF`, MSB-first). (`config_data_string`/`write_config_area` were implemented in Task 11.)
 
 Ground truth: `src/generators/EEPROM.js`, research/02 §1, research/03 §1. LE word addressing (`word N` = byte `2N`); config words 0-7 (CRC at word 7 over first 14 bytes); identity words 8-15; mailbox words 24-28; word 62 = `floor(size/128)-1`; category area from byte `0x80` (STRING/GENERAL/FMMU/SYNCMANAGER). **Bug-5 fix:** validate `EEPROMsize` is a multiple of 32 (ideally 128) → `GenError` otherwise. Image pre-filled `0xFF`.
 
@@ -633,11 +671,9 @@ fn eepromsize_not_multiple_of_32_errors() {   // bug-5 (reference panics)
 ```
 
 - [ ] **Step 2: Run to verify it fails** — FAIL.
-- [ ] **Step 3: Implement** the byte layout, `find_crc`, `config_data_string`, EEPROMsize validation. Port helpers `writeEEPROMword_wordaddress` etc. as functions over `&mut [u8]`.
+- [ ] **Step 3: Implement** the full byte layout (reusing `write_config_area`), `find_crc`, EEPROMsize validation (bug-5), and reject non-ASCII in EEPROM string categories (`GenError`). Port helpers `writeEEPROMword_wordaddress` etc. as functions over `&mut [u8]`.
 - [ ] **Step 4: Run tests** — all PASS. (This is the highest-risk task; if the full image differs, diff `xxd` of the golden vs output to locate the byte.)
 - [ ] **Step 5: Commit** — `git commit -am "feat(gen): SII EEPROM binary + CRC-8 (+EEPROMsize validation)"`
-
-- [ ] **Step 6: Wire `config_data_string` into `gen/esi.rs`** (replace the Task-11 stub), re-run `cargo test --test gen_esi`, commit.
 
 ---
 
@@ -748,8 +784,10 @@ fn generate_default_fills_all_bundle_fields_from_goldens() {
 
 ## Self-review
 
-**Spec coverage:** API (`generate`/`emit`/`Bundle`/`Emitted`/`GenError`) → Tasks 1,14,15. Model + serde + builder → 4,5. `Dtype`/`ESI_DT`/one-numeric-bitsize → 2. `PdoDir` on flat OD → 4 (`pdo_dir`), 7. `od_build` → 7. Five generators → 8–13. Bug fixes: 1→T9, 4→T11, 5→T12/T13, XML escaping→T11; reader bugs 2,3 out of scope (spec). Golden vectors + oracle → 6. CRC known-answer → 12. Filenames → 15. build.rs/CLI → 15,16,17. Non-ASCII rejection → belongs in the string-writing paths (T11 esi, T12 eeprom) — **added note:** each of T11/T12 must reject non-ASCII in EEPROM/ESI-bound strings with `GenError` (per spec Global Constraints).
+**Spec coverage:** API (`generate`/`emit`/`Bundle`/`Emitted`/`GenError`) → Tasks 1,14,15. Model + serde (with `#[serde(default)]` on CoE/FoE bools) + builder → 4,5. `Dtype`/`ESI_DT`/one-numeric-bitsize → 2 (+ INTEGER64 guard test in 8). `PdoDir` on flat OD → 4 (`pdo_dir`), 7; `is_sdo_item` on flat OD → 4/7, consumed by utypes → 8. `od_build` → 7. Five generators → 8–13. Bug fixes: 1→T9, 4→T11(esi), 5→T12(eeprom)/T13, XML escaping→T11(esi); reader bugs 2,3 out of scope (spec). Validation set (dup-name / PDO-dtype / VISIBLE_STRING-size → T7 Step 3b; multiple-PDO → esi; EEPROMsize → eeprom/intel_hex; non-ASCII → esi + eeprom string paths). Golden vectors + oracle → 6 (driven by the fixtures from 4). CRC known-answer → eeprom task. Filenames → 15. build.rs/CLI → 15,16,17.
 
-**Placeholder scan:** the empty `src/gen/*.rs` in Task 1 are deliberate compile stubs, each replaced by a named later task — not TBDs. No "add error handling"/"write tests" hand-waves; every code step has real code or a named ground-truth function to port.
+**Placeholder scan:** the empty `src/gen/*.rs` in Task 1 are deliberate compile stubs, each replaced by a named later task — not TBDs. Fixtures are generated by `scripts/gen_fixtures.js` (T4), not hand-copied. No "add error handling"/"write tests" hand-waves; every code step has real code or a named ground-truth function to port.
 
-**Type consistency:** `generate`/`emit` signatures identical in Tasks 1/14/15; `build_object_dictionary(&Config,&OdSections)->Result<Od,_>` used consistently (7→8–13); generators all `(&Config,&Od[,&[SyncMode]])->String` except `eeprom`(`->Result<Vec<u8>>`) and `intel_hex`(`&[u8]`); `config_data_string` defined in T12 and consumed in T11 (stub-then-wire noted). `Objd::var_with_value` flagged to add in T5/T9.
+**Type consistency:** `generate`/`emit` signatures identical in Tasks 1/14/15; `build_object_dictionary(&Config,&OdSections)->Result<Od,_>` used consistently (7→8–13); text/ESI generators `(&Config,&Od[,&[SyncMode]])->…` , `eeprom::hex_generator(&Config)->Result<Vec<u8>>`, `intel_hex(&[u8])`. **`config_data_string`/`write_config_area` are implemented in Task 11 (esi) — self-contained, no CRC — and reused by Task 12 (eeprom); no forward dependency, no stub.** `Objd::var`/`var_with_value` constructors defined in Task 5 (used in 8/9). `is_sdo_item` field defined in Task 4, set in Task 7, read in Task 8. `indexmap` retained for the editable `OdMap` (preserves JSON key order incl. cia402's 1-digit `"A"` key; flat `Od` is `BTreeMap<u16,_>`).
+
+> **Note on the esi↔eeprom dependency:** no task reorder was needed. ESI (Task 11) needs only the ConfigData string, so Task 11 implements `eeprom::config_data_string` + `write_config_area` self-contained (config words 0-6, no CRC); Task 12 (full EEPROM image) reuses `write_config_area`. Execution order 1→17 is dependency-correct. Bug-4 lives in the esi task (11), bug-5 in the eeprom (12) + intel_hex (13) tasks.
