@@ -14,7 +14,7 @@ use crate::types::{Access, Dtype};
 /// `IndexMap` preserves JSON key order, matching the source tool's output.
 pub type OdMap = IndexMap<String, Objd>;
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct OdSections {
     #[serde(default)]
     pub sdo: OdMap,
@@ -103,6 +103,107 @@ impl Objd {
             PdoDir::None
         }
     }
+
+    fn pdo_mappings_mut(&mut self) -> &mut Vec<String> {
+        match self {
+            Objd::Var { pdo_mappings, .. }
+            | Objd::Array { pdo_mappings, .. }
+            | Objd::Record { pdo_mappings, .. } => pdo_mappings,
+        }
+    }
+
+    /// Builds a `VAR` entry. Index -> uppercase-hex key (`format!("{index:X}")`).
+    pub fn var(index: u16, dtype: Dtype, name: impl Into<String>) -> (String, Objd) {
+        (
+            format!("{index:X}"),
+            Objd::Var {
+                name: name.into(),
+                dtype: Some(dtype),
+                access: None,
+                value: None,
+                size: None,
+                items: Vec::new(),
+                pdo_mappings: Vec::new(),
+                is_sdo_item: false,
+            },
+        )
+    }
+
+    /// Builds a `VAR` entry with an initial value (used by REAL32/REAL64
+    /// value tests etc.). `value` is stored as a JSON string, matching the
+    /// backup format's `objd.value` (e.g. `"value": "1.5"`).
+    pub fn var_with_value(
+        index: u16,
+        dtype: Dtype,
+        name: impl Into<String>,
+        value: &str,
+    ) -> (String, Objd) {
+        let (key, mut objd) = Objd::var(index, dtype, name);
+        set_value(&mut objd, value);
+        (key, objd)
+    }
+
+    /// Builds a `VISIBLE_STRING` `VAR` entry with an initial value and size.
+    pub fn var_string(index: u16, name: impl Into<String>, value: &str, size: u16) -> (String, Objd) {
+        let (key, mut objd) = Objd::var(index, Dtype::VisibleString, name);
+        set_value(&mut objd, value);
+        if let Objd::Var { size: s, .. } = &mut objd {
+            *s = Some(size);
+        }
+        (key, objd)
+    }
+
+    /// Builds an `ARRAY` entry. `dtype` is the element type shared by every
+    /// sub-item (matches the JS reference, e.g. `constants.js:142`'s Sync
+    /// Manager Communication Type array).
+    pub fn array(
+        index: u16,
+        dtype: Dtype,
+        name: impl Into<String>,
+        items: Vec<SubItem>,
+    ) -> (String, Objd) {
+        (
+            format!("{index:X}"),
+            Objd::Array {
+                name: name.into(),
+                dtype: Some(dtype),
+                access: None,
+                value: None,
+                size: None,
+                items,
+                pdo_mappings: Vec::new(),
+                is_sdo_item: false,
+            },
+        )
+    }
+
+    /// Builds a `RECORD` entry. No top-level `dtype` — each sub-item carries
+    /// its own (matches the JS reference, e.g. Identity Object/Sync Manager
+    /// Parameters records in `constants.js`/`od.js`).
+    pub fn record(index: u16, name: impl Into<String>, items: Vec<SubItem>) -> (String, Objd) {
+        (
+            format!("{index:X}"),
+            Objd::Record {
+                name: name.into(),
+                dtype: None,
+                access: None,
+                value: None,
+                size: None,
+                items,
+                pdo_mappings: Vec::new(),
+                is_sdo_item: false,
+            },
+        )
+    }
+}
+
+fn set_value(objd: &mut Objd, value: &str) {
+    let v = Some(serde_json::Value::String(value.to_string()));
+    match objd {
+        Objd::Var { value: dst, .. } | Objd::Array { value: dst, .. } | Objd::Record { value: dst, .. } => {
+            *dst = v;
+        }
+    }
 }
 
 /// A `RECORD`/`ARRAY` sub-index entry, e.g. `{"name": "Max SubIndex"}`.
@@ -187,6 +288,49 @@ pub struct Config {
     pub details_enable_use_foe: bool,
 }
 
+impl Config {
+    /// `getFormDefaultValues().form`, transcribed verbatim from
+    /// `constants.js:183-218`. This is the seed `ProjectBuilder` uses —
+    /// NOT `Default::default()` (which would be empty strings and break
+    /// `build_object_dictionary`'s `parse_u32` on the identity fields).
+    pub fn form_defaults() -> Config {
+        Config {
+            vendor_name: "ACME EtherCAT Devices".into(),
+            vendor_id: "0x000".into(),
+            product_code: "0x00ab123".into(),
+            profile_no: "5001".into(),
+            revision_number: "0x002".into(),
+            serial_number: "0x001".into(),
+            hw_version: "0.0.1".into(),
+            sw_version: "0.0.1".into(),
+            eeprom_size: "2048".into(),
+            rx_mailbox_offset: "0x1000".into(),
+            tx_mailbox_offset: "0x1200".into(),
+            mailbox_size: "512".into(),
+            sm2_offset: "0x1400".into(),
+            sm3_offset: "0x1A00".into(),
+            text_group_type: "DigIn".into(),
+            text_group_name5: "Digital input".into(),
+            image_name: "IMGCBY".into(),
+            text_device_type: "DigIn2000".into(),
+            text_device_name: "2-channel Hypergalactic input superimpermanator".into(),
+            port0_physical: "Y".into(),
+            port1_physical: "Y".into(),
+            port2_physical: " ".into(),
+            port3_physical: " ".into(),
+            esc: "ET1100".into(),
+            spi_mode: "3".into(),
+            coe_details_enable_sdo: true,
+            coe_details_enable_sdo_info: true,
+            coe_details_enable_pdo_assign: false,
+            coe_details_enable_pdo_configuration: false,
+            coe_details_enable_upload_at_startup: true,
+            coe_details_enable_sdo_complete_access: false,
+            details_enable_use_foe: false,
+        }
+    }
+}
+
 /// One DC (distributed clocks) sync mode entry. Renames match the backup
 /// `dc[]` keys verbatim (source data captured from the UI, not JS constants).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -231,6 +375,66 @@ impl Project {
 
     pub fn to_json(&self) -> String {
         serde_json::to_string_pretty(self).expect("Project serialization is infallible")
+    }
+
+    /// Starts a `ProjectBuilder` seeded with the JS form defaults
+    /// (`Config::form_defaults`) and an empty object dictionary/DC list.
+    pub fn builder() -> ProjectBuilder {
+        ProjectBuilder {
+            config: Config::form_defaults(),
+            od: OdSections::default(),
+            dc: Vec::new(),
+        }
+    }
+}
+
+/// Fluent constructor for `Project`. `config` is public — override fields
+/// directly (`b.config.vendor_id = "0x123".into()`) — and pre-seeded with
+/// the JS form defaults, not empty strings (see `Config::form_defaults`).
+pub struct ProjectBuilder {
+    pub config: Config,
+    od: OdSections,
+    dc: Vec<SyncMode>,
+}
+
+impl ProjectBuilder {
+    fn insert(mut self, (index, mut objd): (String, Objd), pdo_mapping: Option<&str>) -> Self {
+        let section = match pdo_mapping {
+            Some(m) => {
+                objd.pdo_mappings_mut().push(m.to_string());
+                match m {
+                    "txpdo" => &mut self.od.txpdo,
+                    "rxpdo" => &mut self.od.rxpdo,
+                    _ => unreachable!("only txpdo/rxpdo are used as pdo_mapping tags"),
+                }
+            }
+            None => &mut self.od.sdo,
+        };
+        section.insert(index, objd);
+        self
+    }
+
+    /// Adds `o` to the SDO section (no PDO mapping tag).
+    pub fn add_sdo(self, o: (String, Objd)) -> Self {
+        self.insert(o, None)
+    }
+
+    /// Adds `o` to the TxPDO section and tags it `pdo_mappings: ["txpdo"]`.
+    pub fn add_txpdo(self, o: (String, Objd)) -> Self {
+        self.insert(o, Some("txpdo"))
+    }
+
+    /// Adds `o` to the RxPDO section and tags it `pdo_mappings: ["rxpdo"]`.
+    pub fn add_rxpdo(self, o: (String, Objd)) -> Self {
+        self.insert(o, Some("rxpdo"))
+    }
+
+    pub fn build(self) -> Project {
+        Project {
+            config: self.config,
+            od: self.od,
+            dc: self.dc,
+        }
     }
 }
 
