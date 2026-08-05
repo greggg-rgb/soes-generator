@@ -280,26 +280,59 @@ mod access_str {
     }
 }
 
-/// (De)serializes `Option<u16>` as a decimal string (JS stores `objd.size`
-/// as a plain string from a text input, e.g. `"2"`).
+/// (De)serializes `Option<u16>`. The real backup format writes `objd.size`
+/// as a JSON **number** (`ui.js:453` `objd.size = parseInt(...)`,
+/// `od.js:270-274`); some Jasmine spec literals use a string instead. Accept
+/// either on read (mirrors the tolerant handling already used for `value`),
+/// always emit a plain number on write.
 mod size_str {
     use serde::{Deserialize, Deserializer, Serializer};
+    use serde_json::Value;
 
     pub fn serialize<S: Serializer>(v: &Option<u16>, s: S) -> Result<S::Ok, S::Error> {
         match v {
-            Some(n) => s.serialize_str(&n.to_string()),
+            Some(n) => s.serialize_u16(*n),
             None => s.serialize_none(),
         }
     }
 
     pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Option<u16>, D::Error> {
-        match Option::<String>::deserialize(d)? {
-            Some(s) => s
+        match Option::<Value>::deserialize(d)? {
+            Some(Value::Number(n)) => n
+                .as_u64()
+                .and_then(|v| u16::try_from(v).ok())
+                .map(Some)
+                .ok_or_else(|| serde::de::Error::custom(format!("size out of range: {n}"))),
+            Some(Value::String(s)) => s
                 .trim()
                 .parse::<u16>()
                 .map(Some)
                 .map_err(serde::de::Error::custom),
+            Some(other) => Err(serde::de::Error::custom(format!(
+                "invalid size: {other}"
+            ))),
             None => Ok(None),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression: the real backup format writes `objd.size` as a JSON
+    /// number (`ui.js:453`, `od.js:270-274`), not a string — a numeric
+    /// VISIBLE_STRING `size` must deserialize, not hard-fail.
+    #[test]
+    fn size_accepts_numeric_and_string() {
+        let numeric = r#"{"otype":"VAR","name":"Device name","dtype":"VISIBLE_STRING","size":8}"#;
+        let o: Objd = serde_json::from_str(numeric).expect("numeric size");
+        let Objd::Var { size, .. } = o else { panic!("expected Var") };
+        assert_eq!(size, Some(8));
+
+        let stringy = r#"{"otype":"VAR","name":"Device name","dtype":"VISIBLE_STRING","size":"8"}"#;
+        let o: Objd = serde_json::from_str(stringy).expect("string size");
+        let Objd::Var { size, .. } = o else { panic!("expected Var") };
+        assert_eq!(size, Some(8));
     }
 }
