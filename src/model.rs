@@ -47,6 +47,12 @@ pub enum Objd {
         pdo_mappings: Vec<String>,
         #[serde(default, rename = "isSDOitem")]
         is_sdo_item: bool,
+        /// `&Obj.<variable_name>` utypes link. Derived by `od_build`
+        /// (`objectlist_link_utypes`, `generators/objectlist.js:29-64`), not
+        /// persisted input — a backup file's `data` is stale/dropped on load
+        /// (see Task 4 progress note) and regenerated on every build.
+        #[serde(default)]
+        data: Option<String>,
     },
     #[serde(rename = "ARRAY")]
     Array {
@@ -65,6 +71,8 @@ pub enum Objd {
         pdo_mappings: Vec<String>,
         #[serde(default, rename = "isSDOitem")]
         is_sdo_item: bool,
+        #[serde(default)]
+        data: Option<String>,
     },
     #[serde(rename = "RECORD")]
     Record {
@@ -83,6 +91,8 @@ pub enum Objd {
         pdo_mappings: Vec<String>,
         #[serde(default, rename = "isSDOitem")]
         is_sdo_item: bool,
+        #[serde(default)]
+        data: Option<String>,
     },
 }
 
@@ -112,6 +122,96 @@ impl Objd {
         }
     }
 
+    /// `od_build`-facing accessors below: the JS reference treats `objd` as
+    /// one loosely-typed shape, so these mirror direct property access
+    /// (`objd.name`, `objd.dtype`, ...) across the three Rust variants.
+    pub fn name(&self) -> &str {
+        match self {
+            Objd::Var { name, .. } | Objd::Array { name, .. } | Objd::Record { name, .. } => name,
+        }
+    }
+
+    pub fn dtype(&self) -> Option<Dtype> {
+        match self {
+            Objd::Var { dtype, .. } | Objd::Array { dtype, .. } | Objd::Record { dtype, .. } => *dtype,
+        }
+    }
+
+    pub fn size(&self) -> Option<u16> {
+        match self {
+            Objd::Var { size, .. } | Objd::Array { size, .. } | Objd::Record { size, .. } => *size,
+        }
+    }
+
+    pub fn value(&self) -> Option<&serde_json::Value> {
+        match self {
+            Objd::Var { value, .. } | Objd::Array { value, .. } | Objd::Record { value, .. } => {
+                value.as_ref()
+            }
+        }
+    }
+
+    pub fn items(&self) -> &[SubItem] {
+        match self {
+            Objd::Var { items, .. } | Objd::Array { items, .. } | Objd::Record { items, .. } => items,
+        }
+    }
+
+    pub fn items_mut(&mut self) -> &mut Vec<SubItem> {
+        match self {
+            Objd::Var { items, .. } | Objd::Array { items, .. } | Objd::Record { items, .. } => items,
+        }
+    }
+
+    pub fn pdo_mappings(&self) -> &[String] {
+        match self {
+            Objd::Var { pdo_mappings, .. }
+            | Objd::Array { pdo_mappings, .. }
+            | Objd::Record { pdo_mappings, .. } => pdo_mappings,
+        }
+    }
+
+    pub fn set_is_sdo_item(&mut self, v: bool) {
+        match self {
+            Objd::Var { is_sdo_item, .. }
+            | Objd::Array { is_sdo_item, .. }
+            | Objd::Record { is_sdo_item, .. } => *is_sdo_item = v,
+        }
+    }
+
+    pub fn set_value(&mut self, v: serde_json::Value) {
+        match self {
+            Objd::Var { value, .. } | Objd::Array { value, .. } | Objd::Record { value, .. } => {
+                *value = Some(v)
+            }
+        }
+    }
+
+    pub fn set_size(&mut self, s: u16) {
+        match self {
+            Objd::Var { size, .. } | Objd::Array { size, .. } | Objd::Record { size, .. } => {
+                *size = Some(s)
+            }
+        }
+    }
+
+    pub fn set_data(&mut self, d: impl Into<String>) {
+        match self {
+            Objd::Var { data, .. } | Objd::Array { data, .. } | Objd::Record { data, .. } => {
+                *data = Some(d.into())
+            }
+        }
+    }
+
+    /// `addPdoMapping`, `od.js:232-241` — idempotent: tags `objd` with the
+    /// given PDO section name (`"txpdo"`/`"rxpdo"`) unless already present.
+    pub fn add_pdo_mapping(&mut self, pdo_name: &str) {
+        let v = self.pdo_mappings_mut();
+        if !v.iter().any(|m| m == pdo_name) {
+            v.push(pdo_name.to_string());
+        }
+    }
+
     /// Builds a `VAR` entry. Index -> uppercase-hex key (`format!("{index:X}")`).
     pub fn var(index: u16, dtype: Dtype, name: impl Into<String>) -> (String, Objd) {
         (
@@ -125,6 +225,7 @@ impl Objd {
                 items: Vec::new(),
                 pdo_mappings: Vec::new(),
                 is_sdo_item: false,
+                data: None,
             },
         )
     }
@@ -173,6 +274,7 @@ impl Objd {
                 items,
                 pdo_mappings: Vec::new(),
                 is_sdo_item: false,
+                data: None,
             },
         )
     }
@@ -192,6 +294,7 @@ impl Objd {
                 items,
                 pdo_mappings: Vec::new(),
                 is_sdo_item: false,
+                data: None,
             },
         )
     }
@@ -216,6 +319,10 @@ pub struct SubItem {
     pub value: Option<serde_json::Value>,
     #[serde(default, with = "access_str")]
     pub access: Option<Access>,
+    /// See `Objd::data` — same derived utypes link, set on RECORD/ARRAY
+    /// sub-items by `objectlist_link_utypes` (`generators/objectlist.js:29-64`).
+    #[serde(default)]
+    pub data: Option<String>,
 }
 
 /// The UI form / device settings. Field list and defaults transcribed

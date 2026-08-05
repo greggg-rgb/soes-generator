@@ -48,6 +48,7 @@ fn array_and_record_land_in_sdo_section() {
         dtype: None,
         value: None,
         access: None,
+        data: None,
     }];
     let p = Project::builder()
         .add_sdo(Objd::array(
