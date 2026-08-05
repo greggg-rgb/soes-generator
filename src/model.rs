@@ -171,6 +171,14 @@ impl Objd {
         }
     }
 
+    pub fn is_sdo_item(&self) -> bool {
+        match self {
+            Objd::Var { is_sdo_item, .. }
+            | Objd::Array { is_sdo_item, .. }
+            | Objd::Record { is_sdo_item, .. } => *is_sdo_item,
+        }
+    }
+
     pub fn set_is_sdo_item(&mut self, v: bool) {
         match self {
             Objd::Var { is_sdo_item, .. }
