@@ -39,8 +39,10 @@ src/
   gen/esi.rs       ESI XML   (+ 4-port bug-4 fix, XML escaping)
   gen/eeprom.rs    SII image → Vec<u8> (word/byte layout, CRC-8, categories) + EEPROMsize validation
   gen/intel_hex.rs bin → Intel HEX + C header
+  esi_import.rs    reserved seam (spec §Extensibility): `unimplemented!()` in v1; ESI-XML import lands here later
   bin/soes_gen.rs  CLI
 scripts/
+  gen_fixtures.js  emit tests/fixtures/{default,foe,cia402}.json (Task 4)
   dump_golden.js   jsdom: run JS generators on each fixture, write tests/golden/**
 tests/
   golden/<fixture>/{objectlist.c,utypes.h,ecat_options.h,device.xml,eeprom.bin,eeprom.hex,eeprom.h,configdata.txt}
@@ -350,7 +352,7 @@ git commit -m "feat(model): Project/Config/Objd serde + esi.json round-trip"
 - Test: `tests/builder.rs`
 
 **Interfaces:**
-- Produces: `impl Project { pub fn builder() -> ProjectBuilder }`; `ProjectBuilder` with `config: Config` public (override fields directly), and `add_sdo(Objd)`, `add_txpdo(Objd)`, `add_rxpdo(Objd)`, `build() -> Project`. Constructors `Objd::var(index, Dtype, name)`, `Objd::var_with_value(index, Dtype, name, value: &str)` (used by the REAL32/REAL64/INTEGER64 tests), `Objd::var_string(index, name, value: &str, size: u16)` (VISIBLE_STRING), `Objd::array(...)`, `Objd::record(...)`. Index passed as `u16`, stored as the uppercase-hex key (`format!("{index:X}")`).
+- Produces: `impl Project { pub fn builder() -> ProjectBuilder }`; `ProjectBuilder` with `config: Config` public (override fields directly), and `add_sdo(Objd)`, `add_txpdo(Objd)`, `add_rxpdo(Objd)`, `build() -> Project`. Constructors `Objd::var(index, Dtype, name)`, `Objd::var_with_value(index, Dtype, name, value: &str)` (used by the REAL32/REAL64 value tests), `Objd::var_string(index, name, value: &str, size: u16)` (VISIBLE_STRING), `Objd::array(...)`, `Objd::record(...)`. Index passed as `u16`, stored as the uppercase-hex key (`format!("{index:X}")`).
   - **The builder MUST seed `config` with the form defaults** (`getFormDefaultValues().form`: `VendorID "0x000"`, `ProductCode/RevisionNumber/SerialNumber` defaults, non-empty device/HW/SW strings, `EEPROMsize "2048"`, `ESC "ET1100"`), NOT `Config::default()` (empty strings). This is load-bearing: `build_object_dictionary` parses the identity fields via `parse_u32` (`populateMandatoryObjectValues`, `od.js:275`), which errors on empty strings — so a builder-built project with an empty default `Config` would fail `build_object_dictionary().unwrap()` in every downstream builder test (Tasks 7/8/9/10).
 
 - [ ] **Step 1: Write the failing test**
