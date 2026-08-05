@@ -30,5 +30,20 @@ pub struct Bundle {
 
 pub struct Emitted { pub paths: Vec<std::path::PathBuf> }
 
-pub fn generate(_p: &Project) -> Result<Bundle, GenError> { todo!() }
+pub fn generate(p: &Project) -> Result<Bundle, GenError> {
+    let od = od_build::build_object_dictionary(&p.config, &p.od)?;
+    let bin = generators::eeprom::hex_generator(&p.config)?;
+    let hex = generators::intel_hex::to_intel_hex(&bin)?;
+    let eeprom_h = generators::intel_hex::to_esi_eeprom_h(&bin);
+    Ok(Bundle {
+        objectlist_c: generators::objectlist::generate(&p.config, &od),
+        utypes_h: generators::utypes::generate(&p.config, &od),
+        ecat_options_h: generators::ecat_options::generate(&p.config, &od),
+        esi_xml: generators::esi::generate(&p.config, &od, &p.dc)?,
+        eeprom_bin: bin,
+        eeprom_hex: hex,
+        eeprom_h,
+        backup_json: p.to_json(),
+    })
+}
 pub fn emit(_p: &Project, _out_dir: &Path) -> Result<Emitted, GenError> { todo!() }
