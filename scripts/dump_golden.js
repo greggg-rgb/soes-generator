@@ -70,6 +70,21 @@ function patchDivergences(name, data) {
     // #endif quirk: conformant comment form instead of the bare token.
     return data.replace('#endif __ESI_EEPROM_H__', '#endif /* __ESI_EEPROM_H__ */');
   }
+  if (name === 'eeprom.hex') {
+    // bug-1: zero-pad the checksum byte. The JS reference emits a single hex
+    // digit when the checksum < 0x10 (`.slice(-2)` of e.g. "7"); the port
+    // emits a conformant 2-digit "07". A correct data record is 11+2*LL chars
+    // (`:`+LL+AAAA+TT+data+cksum); a buggy one is one char short, so insert a
+    // leading zero before the final checksum digit. Idempotent on fixed lines.
+    return data.split('\n').map((line) => {
+      const m = /^:([0-9A-Fa-f]{2})/.exec(line);
+      if (!m) return line;
+      const expected = 11 + 2 * parseInt(m[1], 16);
+      return line.length === expected - 1
+        ? line.slice(0, -1) + '0' + line.slice(-1)
+        : line;
+    }).join('\n');
+  }
   return data;
 }
 
@@ -91,7 +106,9 @@ function dumpFixture(name) {
 
   const bytes = w.hex_generator(form); // Uint8Array, stringOnly=false
   writeFile(outDir, 'eeprom.bin', Buffer.from(bytes));
-  writeFile(outDir, 'eeprom.hex', w.toIntelHex(bytes));
+  // eeprom.hex: apply the bug-1 divergence — the Rust port zero-pads every
+  // checksum byte to 2 digits; the JS reference emits 1 digit when < 0x10.
+  writeFile(outDir, 'eeprom.hex', patchDivergences('eeprom.hex', w.toIntelHex(bytes)));
   // eeprom.h: apply the #endif divergence — the Rust port emits conformant
   // `#endif /* __ESI_EEPROM_H__ */` instead of the JS bare `#endif __ESI_EEPROM_H__`.
   writeFile(outDir, 'eeprom.h', patchDivergences('eeprom.h', w.toEsiEepromH(bytes)));

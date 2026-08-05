@@ -18,6 +18,11 @@
 //! 2. every `tests/golden/*/eeprom.h`: the trailing `#endif __ESI_EEPROM_H__`
 //!    (JS bare token, non-conformant under `-pedantic`) → the conformant
 //!    `#endif /* __ESI_EEPROM_H__ */`. See docs/faithful-port-quirks.md #2.
+//! 3. every `tests/golden/*/eeprom.hex`: the checksum byte is zero-padded to
+//!    two hex digits. The JS reference's `.slice(-2)` left a single digit when
+//!    the checksum was below 0x10 (one such record per fixture, at address
+//!    0x0100), producing a malformed Intel-HEX line; the Rust port emits a
+//!    conformant 2-digit checksum. See docs/faithful-port-quirks.md #1.
 //!
 //! No fixture contains `& < >`, so XML escaping does not otherwise alter any
 //! golden.

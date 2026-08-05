@@ -107,3 +107,7 @@ for proofs and full detail):
   did not do.
 - **`eeprom.h` ends with the conformant `#endif /* __ESI_EEPROM_H__ */`**, not the reference's
   bare `#endif __ESI_EEPROM_H__` token (non-conformant under `-pedantic`).
+- **Intel-HEX checksum bytes are zero-padded to two hex digits.** The reference's
+  `.slice(-2)` left a single digit when the checksum was below `0x10`, producing malformed
+  records; the port emits a conformant 2-digit checksum (verified parseable by SOEM's
+  `eepromtool`).

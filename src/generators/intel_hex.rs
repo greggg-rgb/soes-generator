@@ -36,17 +36,16 @@ pub fn to_intel_hex(record: &[u8]) -> Result<String, GenError> {
             hex.push_str(&format!("{byte:02x}"));
             checksum += byte as u32;
         }
-        // Two's complement: range 1..=256, NOT reduced mod 0x100 again — JS
-        // does `checksum = 0x100 - checksum` with no further mod, so a
-        // sum ≡ 0 (mod 256) yields exactly 256 ("100" in hex), not 0.
-        let checksum = 0x100 - (checksum % 0x100);
-        // JS reference: `checksum.toString(16).slice(-2)` takes the LAST 2
-        // characters, no zero-padding. This means: a checksum below 0x10
-        // (unlike data bytes, which pad explicitly) emits as a single hex
-        // digit, while 256 ("100") correctly emits "00" (its last 2 chars).
-        // Both cases replicated verbatim for byte-for-byte golden parity.
-        let full = format!("{checksum:x}");
-        hex.push_str(&full[full.len().saturating_sub(2)..]);
+        // Two's-complement checksum byte, always 2 hex digits. This is an
+        // intentional divergence from the JS reference (`binaries.js`), which
+        // does `(0x100 - checksum).toString(16).slice(-2)` with no zero-pad:
+        // a checksum below 0x10 emits as a single hex digit (e.g. "7" not
+        // "07"), producing spec-non-conformant Intel HEX. The `& 0xff` folds
+        // the sum≡0 case (0x100) to 0x00 — this matches SOEM eepromtool's own
+        // `(0x100 - sum) & 0xff` (samples/eepromtool/eepromtool.c). See
+        // docs/faithful-port-quirks.md #1.
+        let checksum = (0x100 - (checksum % 0x100)) & 0xff;
+        hex.push_str(&format!("{checksum:02x}"));
         hex.push('\n');
     }
     hex.push_str(":00000001FF");

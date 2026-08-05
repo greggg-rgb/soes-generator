@@ -21,7 +21,7 @@ already-cataloged latent issues.
 
 | # | Behavior | Rust site | JS ref | Verdict | Real-world impact |
 |---|----------|-----------|--------|---------|-------------------|
-| 1 | Intel-HEX checksum not zero-padded (1 hex digit when < 0x10) | `generators/intel_hex.rs:42-49` | `binaries.js:52` | 🔴 **Inherited bug** | Malformed `.hex` records; a strict flasher/parser rejects or misreads them |
+| 1 | Intel-HEX checksum not zero-padded (1 hex digit when < 0x10) | `generators/intel_hex.rs` | `binaries.js:52` | ✅ **FIXED** | Was: malformed `.hex` records a strict flasher/parser rejects. Now emits 2-digit checksums |
 | 2 | Bare `#endif __ESI_EEPROM_H__` token (not a comment) | `generators/intel_hex.rs:87` | `binaries.js:89` | ✅ **FIXED** | Was: warns under `-Wextra`/`-pedantic`. Now emits `#endif /* … */` |
 | 3 | VISIBLE_STRING `value` column always `"0"` placeholder | `generators/objectlist.rs:162-167` | `objectlist.js:183-196` | 🟢 By design | None — string default travels via `utypes`/`data`, not the value column |
 | 4 | SM2/SM3 physical **size** hard-written `0` in the SII | `generators/eeprom.rs` `write_sync_managers` | `EEPROM.js:252,261` | 🟡 Quirk (likely fine) | Normal in many SIIs; master derives size from PDO config. Not validated |
@@ -33,7 +33,7 @@ Details below. All line numbers are current as of the merge to `master` (`0bb392
 
 ---
 
-## 1. 🔴 Intel-HEX checksum is not zero-padded
+## 1. ✅ Intel-HEX checksum is not zero-padded — FIXED
 
 **Reference (`binaries.js`, `toIntelHex`):**
 ```js
@@ -53,22 +53,25 @@ So when the two's-complement checksum lands in `0x01..=0x0F`, `toString(16)` is 
 single character and `.slice(-2)` leaves it a single character — the record's checksum
 field is one nibble wide instead of two, and the line is malformed.
 
-**What we did:** replicated it exactly (`intel_hex.rs:42-49`) — including correctly
-reproducing the `checksum == 0x100` edge (`"100".slice(-2) == "00"`, a two-digit case
-that a naive `% 0x100` would break; see the Task 13 fix). The single-digit case is
-preserved because the golden `eeprom.hex` contains such records (e.g. the record at
-address `0x0100`).
-
-**Is it really a bug?** Yes, unambiguously. The `.hex` is only *coincidentally*
-readable — a checksum in `0x01..=0x0F` (~1 in 16 records) produces a line that a
+**Is it really a bug?** Yes, unambiguously. The `.hex` was only *coincidentally*
+readable — a checksum in `0x01..=0x0F` (~1 in 16 records) produced a line that a
 compliant parser (`srec_cat`, `objcopy`, most EEPROM flashers) would reject or
-misparse. For a 2048-byte image (~64 data records) expect a few malformed records per
-file. It went unnoticed upstream presumably because consumers use the `.bin`, not the
-`.hex`.
+misparse. Every golden `eeprom.hex` had exactly one such record (the one at address
+`0x0100`). It went unnoticed upstream presumably because consumers use the `.bin`.
 
-**Recommendation:** worth fixing — zero-pad the checksum to two digits (a two-line
-change: pad the `full` slice). **This changes the `eeprom.hex` golden**, so it's a
-deliberate divergence like bugs 1/4/5, not a silent edit. The `.bin` is unaffected.
+**What we did:** **fixed it** (`intel_hex.rs`). The checksum is now
+`(0x100 - (checksum % 0x100)) & 0xff` formatted as `{:02x}` — always two hex digits.
+The `& 0xff` folds the `sum ≡ 0` case (`0x100`) to `0x00`, matching SOEM eepromtool's
+own formula. **This changes the `eeprom.hex` golden** (`...FF7` → `...FF07`, one line
+per fixture), so it's a deliberate divergence like bugs 1/4/5; the dump reproduces it
+via `dump_golden.js`'s `patchDivergences('eeprom.hex', …)`. The `.bin` is unaffected.
+
+**Verified against a real consumer:** SOEM's `eepromtool` (`samples/eepromtool/
+eepromtool.c`, `input_intelhex`, commit `2f73eaa`) parses the fixed goldens with rc=1
+(2048 bytes, no "Invalid checksum."). It also *tolerated* the buggy form — its parser
+reads the checksum from a fixed offset with `sscanf("%2x")`, so a trailing single digit
+still parsed as the correct value — but the fix makes the output conformant for stricter
+tools regardless.
 Decision needed: does anyone consume the `.hex`? If yes → fix. If the `.bin` is the
 only artifact anyone flashes → safe to leave, but document it as known-broken.
 
@@ -263,10 +266,9 @@ padding (JS `NaN` → we pass through), RECORD-with-VISIBLE_STRING-subitem PDO b
 
 ## Bottom line
 
-- **One real inherited bug to decide on:** #1, the Intel-HEX checksum padding. Fixable in
-  two lines; the question is whether anyone consumes the `.hex` (if only the `.bin` is
-  flashed, it's moot). Everything else is a quirk, a conservative limitation, or correct
-  by design.
+- **No open inherited bugs.** The two that were real — #1 (Intel-HEX checksum padding)
+  and #2 (bare `#endif` token) — are both fixed. Everything else is a quirk, a
+  conservative limitation, or correct by design.
 - **Two "match the reference limitation" stances** worth a conscious sign-off: #4 (SM2/SM3
   size 0) and #6 (boolean arrays) — both fine for the devices this tool targets, both
   gaps if the scope widens.
