@@ -91,10 +91,11 @@ fn sdo_declaration_block(idx: u16, objd: &Objd) -> String {
             let flags = atype_flags(*access, objd.pdo_dir());
             for (i, item) in items.iter().enumerate().skip(1) {
                 let subi = subindex_padded(i as u16);
+                let subindex = format!("{i:02X}");
                 let val = item_value(dtype, item.value.as_ref());
                 let data = item.data.as_deref().filter(|d| !d.is_empty()).unwrap_or("NULL");
                 s.push_str(&format!(
-                    "\n  {{0x{subi}, DTYPE_{}, {bitsize}, {flags}, acName{index}_{subi}, {val}, {data}}},",
+                    "\n  {{0x{subindex}, DTYPE_{}, {bitsize}, {flags}, acName{index}_{subi}, {val}, {data}}},",
                     dtype.macro_suffix()
                 ));
             }
@@ -106,6 +107,7 @@ fn sdo_declaration_block(idx: u16, objd: &Objd) -> String {
             ));
             for (i, item) in items.iter().enumerate().skip(1) {
                 let subi = subindex_padded(i as u16);
+                let subindex = format!("{i:02X}");
                 let subdtype = item.dtype.expect("RECORD subitem without dtype");
                 let bitsize = subdtype.esi().bitsize;
                 let val = item_value(subdtype, item.value.as_ref());
@@ -115,7 +117,7 @@ fn sdo_declaration_block(idx: u16, objd: &Objd) -> String {
                 let flags = atype_flags(item.access, PdoDir::None);
                 let data = item.data.as_deref().filter(|d| !d.is_empty()).unwrap_or("NULL");
                 s.push_str(&format!(
-                    "\n  {{0x{subi}, DTYPE_{}, {bitsize}, {flags}, acName{index}_{subi}, {val}, {data}}},",
+                    "\n  {{0x{subindex}, DTYPE_{}, {bitsize}, {flags}, acName{index}_{subi}, {val}, {data}}},",
                     subdtype.macro_suffix()
                 ));
             }
@@ -199,12 +201,9 @@ fn atype_flags(access: Option<Access>, dir: PdoDir) -> String {
     flags
 }
 
-/// `subindex_padded`, `objectlist.js:198-204`. REFERENCE QUIRK: zero-padded
-/// to 2 **decimal** digits, then emitted after a literal `0x` at call
-/// sites — subindex 10 becomes the text `0x10`, meaning decimal 10, not
-/// hex. `{:02}` (decimal, width 2) reproduces this for the full practical
-/// subindex range (JS never left-pads past 2 digits either: `${subindex}`
-/// once `subindex > 9`).
+/// Format subindex name suffixes as two decimal digits, matching the generated
+/// `acName..._<subindex>` identifiers. Numeric C fields use hexadecimal formatting
+/// at their call sites.
 fn subindex_padded(subindex: u16) -> String {
     format!("{subindex:02}")
 }

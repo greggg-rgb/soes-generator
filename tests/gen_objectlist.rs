@@ -1,5 +1,5 @@
 mod common;
-use soes_generator::{generators::objectlist, model::{Objd, Project}, od_build::build_object_dictionary, types::Dtype};
+use soes_generator::{generators::objectlist, model::{Objd, Project, SubItem}, od_build::build_object_dictionary, types::Dtype};
 
 #[test]
 fn objectlist_default_matches_golden() {
@@ -22,6 +22,43 @@ fn real32_default_value_is_encoded_not_zeroed() {
     let od = build_object_dictionary(&p.config, &p.od).unwrap();
     let out = objectlist::generate(&p.config, &od);
     assert!(out.contains("0x3FC00000"), "REAL32 1.5 must encode IEEE-754, got:\n{out}");
+}
+
+fn wide_items(prefix: &str) -> Vec<SubItem> {
+    (0..=16)
+        .map(|i| SubItem {
+            name: format!("{prefix} {i}"),
+            dtype: Some(Dtype::Unsigned8),
+            value: None,
+            access: None,
+            data: None,
+        })
+        .collect()
+}
+
+fn assert_numeric_subindices(output: &str, index: u16) {
+    for i in 1..=16 {
+        let expected = format!("0x{i:02X}, DTYPE_UNSIGNED8, 8, ATYPE_RO, acName{index:X}_{i:02},");
+        assert!(output.contains(&expected), "missing {expected} in:\n{output}");
+    }
+}
+
+#[test]
+fn objectlist_array_uses_hex_numeric_subindices() {
+    let p = Project::builder()
+        .add_sdo(Objd::array(0x2000, Dtype::Unsigned8, "Wide array", wide_items("array")))
+        .build();
+    let od = build_object_dictionary(&p.config, &p.od).unwrap();
+    assert_numeric_subindices(&objectlist::generate(&p.config, &od), 0x2000);
+}
+
+#[test]
+fn objectlist_record_uses_hex_numeric_subindices() {
+    let p = Project::builder()
+        .add_sdo(Objd::record(0x2001, "Wide record", wide_items("record")))
+        .build();
+    let od = build_object_dictionary(&p.config, &p.od).unwrap();
+    assert_numeric_subindices(&objectlist::generate(&p.config, &od), 0x2001);
 }
 
 #[test]
